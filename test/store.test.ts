@@ -223,6 +223,7 @@ describe("agent status transitions", () => {
 		store.updateAgentStatus("a1", "killed");
 		const agent = must(store.getAgent("a1"), "agent a1");
 		assert.equal(agent.status, "killed");
+		assert.ok(agent.exitedAt);
 	});
 
 	it("rejects spawned → exited", () => {
