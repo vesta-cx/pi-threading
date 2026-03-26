@@ -24,6 +24,9 @@
 		"@mariozechner/pi-tui": "*",
 		"@sinclair/typebox": "*"
 	},
+	"scripts": {
+		"test": "node --import @mariozechner/jiti/register --test test/**/*.test.ts"
+	},
 	"engines": {
 		"node": ">=18.0.0"
 	},
