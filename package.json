@@ -1,0 +1,10 @@
+{
+  "name": "pi-threading",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A pi extension scaffold for orchestrated subagents and future signaling/state experiments.",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
