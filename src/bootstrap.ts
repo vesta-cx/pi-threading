@@ -75,7 +75,3 @@ export function bootstrapSqlite(): { available: boolean; error: string | null } 
 	_available = false;
 	return { available: false, error: _error };
 }
-
-export function isSqliteAvailable(): boolean {
-	return _available;
-}
