@@ -6,6 +6,9 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import { type AgentUsage, createStore, type Store } from "../src/store.js";
 
@@ -31,11 +34,22 @@ describe("schema", () => {
 		assert.ok(trunk.id);
 	});
 
-	it("migrations are idempotent", () => {
-		const store2 = createStore(":memory:");
-		const trunk = store2.createTrunk({});
-		assert.ok(trunk.id);
-		store2.close();
+	it("migrations are idempotent (same file opened twice)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "store-test-"));
+		try {
+			const dbPath = join(dir, "test.db");
+			const s1 = createStore(dbPath);
+			s1.createTrunk({ id: "t1" });
+			s1.close();
+
+			// Re-open the same DB — migrations run again, data survives
+			const s2 = createStore(dbPath);
+			const trunk = must(s2.getTrunk("t1"), "trunk t1 after reopen");
+			assert.equal(trunk.id, "t1");
+			s2.close();
+		} finally {
+			rmSync(dir, { recursive: true });
+		}
 	});
 });
 

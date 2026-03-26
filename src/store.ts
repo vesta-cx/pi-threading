@@ -352,8 +352,10 @@ class StoreImpl implements Store {
 	// -- Cleanup -------------------------------------------------------------
 
 	clearTrunk(trunkId: string): void {
-		this.db.prepare("DELETE FROM agents WHERE trunk_id = ?").run(trunkId);
-		this.db.prepare("DELETE FROM trunks WHERE id = ?").run(trunkId);
+		this.db.transaction(() => {
+			this.db.prepare("DELETE FROM agents WHERE trunk_id = ?").run(trunkId);
+			this.db.prepare("DELETE FROM trunks WHERE id = ?").run(trunkId);
+		})();
 	}
 
 	// -- Lifecycle -----------------------------------------------------------
@@ -378,6 +380,8 @@ export function createStore(dbPath: string): Store {
 	db.pragma("journal_mode = WAL");
 	// Enforce foreign keys
 	db.pragma("foreign_keys = ON");
+	// Wait up to 5s for locks instead of failing immediately with SQLITE_BUSY
+	db.pragma("busy_timeout = 5000");
 
 	runMigrations(db);
 
