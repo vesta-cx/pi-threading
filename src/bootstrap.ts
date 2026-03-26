@@ -5,16 +5,24 @@
  * the platform, triggers `npm rebuild` in the package directory and retries.
  */
 
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 
+interface BootstrapError {
+	summary: string;
+	detail: string;
+	recovery: string;
+}
+
+export type BootstrapResult = { available: true; error: null } | { available: false; error: BootstrapError };
+
 let _bootstrapped = false;
 let _available = false;
-let _error: string | null = null;
+let _error: BootstrapError | null = null;
 
 function getPackageDir(): string {
 	const thisFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
@@ -23,6 +31,16 @@ function getPackageDir(): string {
 }
 
 let _lastError: unknown = null;
+
+function createBootstrapError(error: unknown): BootstrapError {
+	const detail = error instanceof Error ? error.message : String(error ?? "unknown error");
+
+	return {
+		summary: "Failed to load better-sqlite3.",
+		detail: `Reason: ${detail}`,
+		recovery: `Try running: cd ${getPackageDir()} && npm rebuild better-sqlite3`,
+	};
+}
 
 function tryRequire(): boolean {
 	try {
@@ -37,11 +55,28 @@ function tryRequire(): boolean {
 function tryRebuild(): boolean {
 	const pkgDir = getPackageDir();
 	try {
-		execSync("npm rebuild better-sqlite3", {
+		const rebuild = spawnSync("npm", ["rebuild", "better-sqlite3"], {
 			cwd: pkgDir,
-			stdio: "pipe",
+			stdio: "inherit",
 			timeout: 60_000,
+			shell: process.platform === "win32",
 		});
+
+		if (rebuild.error) {
+			_lastError = rebuild.error;
+			return false;
+		}
+
+		if (rebuild.signal) {
+			_lastError = new Error(`npm rebuild better-sqlite3 was terminated by signal ${rebuild.signal}`);
+			return false;
+		}
+
+		if (rebuild.status !== 0) {
+			_lastError = new Error(`npm rebuild better-sqlite3 exited with code ${rebuild.status ?? "unknown"}`);
+			return false;
+		}
+
 		return tryRequire();
 	} catch (err) {
 		_lastError = err;
@@ -49,7 +84,7 @@ function tryRebuild(): boolean {
 	}
 }
 
-export function bootstrapSqlite(): { available: boolean; error: string | null } {
+export function bootstrapSqlite(): BootstrapResult {
 	if (_bootstrapped) {
 		return { available: _available, error: _error };
 	}
@@ -66,12 +101,7 @@ export function bootstrapSqlite(): { available: boolean; error: string | null } 
 		return { available: true, error: null };
 	}
 
-	const detail = _lastError instanceof Error ? _lastError.message : String(_lastError ?? "unknown error");
-	_error = [
-		"pi-threading: Failed to load better-sqlite3.",
-		`Reason: ${detail}`,
-		`Try running: cd ${getPackageDir()} && npm rebuild better-sqlite3`,
-	].join("\n");
+	_error = createBootstrapError(_lastError);
 	_available = false;
 	return { available: false, error: _error };
 }
