@@ -53,6 +53,10 @@ export default function piThreading(pi: ExtensionAPI) {
 			return;
 		}
 
+		if (!ctx.hasUI) {
+			return;
+		}
+
 		if (subagent) {
 			ctx.ui.setStatus("pi-threading", ctx.ui.theme.fg("dim", `subagent ${env.agentId?.slice(0, 8)}`));
 		} else {

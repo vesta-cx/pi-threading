@@ -6,12 +6,14 @@
  */
 
 import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 let _bootstrapped = false;
 let _available = false;
 let _error: string | null = null;
+const require = createRequire(import.meta.url);
 
 function getPackageDir(): string {
 	const thisFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
@@ -66,8 +68,4 @@ export function bootstrapSqlite(): { available: boolean; error: string | null } 
 	].join("\n");
 	_available = false;
 	return { available: false, error: _error };
-}
-
-export function isSqliteAvailable(): boolean {
-	return _available;
 }
