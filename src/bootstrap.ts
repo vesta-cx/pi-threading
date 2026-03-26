@@ -19,11 +19,14 @@ function getPackageDir(): string {
 	return resolve(dirname(thisFile), "..");
 }
 
+let _lastError: unknown = null;
+
 function tryRequire(): boolean {
 	try {
 		require("better-sqlite3");
 		return true;
-	} catch {
+	} catch (err) {
+		_lastError = err;
 		return false;
 	}
 }
@@ -37,7 +40,8 @@ function tryRebuild(): boolean {
 			timeout: 60_000,
 		});
 		return tryRequire();
-	} catch {
+	} catch (err) {
+		_lastError = err;
 		return false;
 	}
 }
@@ -59,9 +63,10 @@ export function bootstrapSqlite(): { available: boolean; error: string | null } 
 		return { available: true, error: null };
 	}
 
+	const detail = _lastError instanceof Error ? _lastError.message : String(_lastError ?? "unknown error");
 	_error = [
 		"pi-threading: Failed to load better-sqlite3.",
-		"Prebuilt binaries are not available for this platform and `npm rebuild` failed.",
+		`Reason: ${detail}`,
 		`Try running: cd ${getPackageDir()} && npm rebuild better-sqlite3`,
 	].join("\n");
 	_available = false;

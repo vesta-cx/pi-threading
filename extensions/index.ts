@@ -34,6 +34,12 @@ function readEnv(): ThreadingEnv {
 	};
 }
 
+/**
+ * Subagent mode requires agentId, dbPath, and trunkId.
+ * parentId is NOT required here — the root agent in a trunk has no parent
+ * but is still registered in the DB. parentId is only set for children
+ * spawned by another agent.
+ */
 function isSubagentMode(env: ThreadingEnv): boolean {
 	return Boolean(env.agentId && env.dbPath && env.trunkId);
 }
@@ -46,10 +52,10 @@ export default function piThreading(pi: ExtensionAPI) {
 	const sqlite = bootstrapSqlite();
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (!ctx.hasUI) return;
+
 		if (!sqlite.available) {
-			if (ctx.hasUI) {
-				ctx.ui.notify(`pi-threading: ${sqlite.error}`, "error");
-			}
+			ctx.ui.notify(`pi-threading: ${sqlite.error}`, "error");
 			return;
 		}
 
