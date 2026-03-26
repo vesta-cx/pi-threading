@@ -352,8 +352,10 @@ class StoreImpl implements Store {
 	// -- Cleanup -------------------------------------------------------------
 
 	clearTrunk(trunkId: string): void {
-		this.db.prepare("DELETE FROM agents WHERE trunk_id = ?").run(trunkId);
-		this.db.prepare("DELETE FROM trunks WHERE id = ?").run(trunkId);
+		this.db.transaction(() => {
+			this.db.prepare("DELETE FROM agents WHERE trunk_id = ?").run(trunkId);
+			this.db.prepare("DELETE FROM trunks WHERE id = ?").run(trunkId);
+		})();
 	}
 
 	// -- Lifecycle -----------------------------------------------------------
