@@ -20,17 +20,14 @@ interface BootstrapError {
 
 export type BootstrapResult = { available: true; error: null } | { available: false; error: BootstrapError };
 
-let _bootstrapped = false;
-let _available = false;
-let _error: BootstrapError | null = null;
+let _result: BootstrapResult | null = null;
+let _lastError: unknown = null;
 
 function getPackageDir(): string {
 	const thisFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
 	// src/bootstrap.ts -> package root
 	return resolve(dirname(thisFile), "..");
 }
-
-let _lastError: unknown = null;
 
 function createBootstrapError(error: unknown): BootstrapError {
 	const detail = error instanceof Error ? error.message : String(error ?? "unknown error");
@@ -53,8 +50,8 @@ function tryRequire(): boolean {
 }
 
 function tryRebuild(): boolean {
-	const pkgDir = getPackageDir();
 	try {
+		const pkgDir = getPackageDir();
 		const rebuild = spawnSync("npm", ["rebuild", "better-sqlite3"], {
 			cwd: pkgDir,
 			stdio: "inherit",
@@ -85,23 +82,21 @@ function tryRebuild(): boolean {
 }
 
 export function bootstrapSqlite(): BootstrapResult {
-	if (_bootstrapped) {
-		return { available: _available, error: _error };
+	if (_result) {
+		return _result;
 	}
-	_bootstrapped = true;
 
 	if (tryRequire()) {
-		_available = true;
-		return { available: true, error: null };
+		_result = { available: true, error: null };
+		return _result;
 	}
 
 	// Prebuilt binary didn't match — attempt rebuild
 	if (tryRebuild()) {
-		_available = true;
-		return { available: true, error: null };
+		_result = { available: true, error: null };
+		return _result;
 	}
 
-	_error = createBootstrapError(_lastError);
-	_available = false;
-	return { available: false, error: _error };
+	_result = { available: false, error: createBootstrapError(_lastError) };
+	return _result;
 }
