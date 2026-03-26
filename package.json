@@ -1,10 +1,33 @@
 {
-  "name": "pi-threading",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "A pi extension scaffold for orchestrated subagents and future signaling/state experiments.",
-  "pi": {
-    "extensions": ["./index.ts"]
-  }
+	"name": "pi-threading",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Recursive subagent orchestration framework for pi — spawn, manage, and communicate with specialist agent trees.",
+	"keywords": [
+		"pi-package"
+	],
+	"license": "MIT",
+	"pi": {
+		"extensions": [
+			"./extensions"
+		],
+		"prompts": [
+			"./prompts"
+		]
+	},
+	"dependencies": {
+		"better-sqlite3": "^11.0.0"
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-ai": "*",
+		"@mariozechner/pi-coding-agent": "*",
+		"@mariozechner/pi-tui": "*",
+		"@sinclair/typebox": "*"
+	},
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.9"
+	}
 }

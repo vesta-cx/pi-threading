@@ -1,5 +1,7 @@
 .references/*
 !.references/README.md
+.plans/
+.worktrees/
 node_modules/
 .DS_Store
 .plans/

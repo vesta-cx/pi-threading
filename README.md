@@ -1,28 +1,37 @@
 # pi-threading
 
-A minimal Pi extension scaffold for orchestrating specialist subagents.
+Subagent orchestration framework scaffold for [pi](https://github.com/badlogic/pi-mono).
 
-## What this starter gives you
+This repository currently provides the package structure, built-in agent definitions, prompt templates, and native SQLite bootstrap that later orchestration slices build on.
 
-- A root `index.ts` extension entrypoint
-- A `/subagents` command placeholder
-- A status line hook so the extension is visible when loaded
-- A local `.references/` area for copied reference material and example implementations
+## Current status
 
-## Reference workspace
+Implemented in this scaffold:
 
-Drop reference code and docs into `.references/` while you explore patterns from:
+- package layout for `extensions/`, `src/`, `agents/`, and `prompts/`
+- `better-sqlite3` bootstrap with automatic `npm rebuild` fallback
+- root vs subagent mode detection in the extension entrypoint
+- built-in `scout`, `planner`, `reviewer`, and `worker` agent definitions
+- `/orchestrate` and `/scout-and-plan` prompt templates
 
-- `@mariozechner/pi-coding-agent`
-- other pi extensions you want to study
-- local notes about orchestration, volatile state, or signaling ideas
+Planned in later slices:
 
-Anything under `.references/` is ignored by git, except this short README note.
+- runtime and process management
+- orchestrator and subagent tools
+- question routing and idle wake-up
+- visualization, inbox, and management commands
 
-## Next obvious step
+See [PRD #1](https://github.com/mia-cx/pi-threading/issues/1) and the local `.plans/` directory for the full design and slice breakdown.
 
-Add a real subagent registry and decide how to share ephemeral state between instances:
+## Development
 
-- session-backed state via `appendEntry`
-- disk-backed scratch data
-- in-memory signaling if multiple instances can coordinate
+```bash
+git clone git@github.com:mia-cx/pi-threading.git
+cd pi-threading
+npm install
+pi -e .   # test locally
+```
+
+## License
+
+MIT
