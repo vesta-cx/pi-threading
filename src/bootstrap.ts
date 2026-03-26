@@ -20,9 +20,7 @@ interface BootstrapError {
 
 export type BootstrapResult = { available: true; error: null } | { available: false; error: BootstrapError };
 
-let _bootstrapped = false;
-let _available = false;
-let _error: BootstrapError | null = null;
+let _bootstrapped: BootstrapResult | null = null;
 
 function getPackageDir(): string {
 	const thisFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
@@ -86,22 +84,20 @@ function tryRebuild(): boolean {
 
 export function bootstrapSqlite(): BootstrapResult {
 	if (_bootstrapped) {
-		return { available: _available, error: _error };
+		return _bootstrapped;
 	}
-	_bootstrapped = true;
 
 	if (tryRequire()) {
-		_available = true;
-		return { available: true, error: null };
+		_bootstrapped = { available: true, error: null };
+		return _bootstrapped;
 	}
 
 	// Prebuilt binary didn't match — attempt rebuild
 	if (tryRebuild()) {
-		_available = true;
-		return { available: true, error: null };
+		_bootstrapped = { available: true, error: null };
+		return _bootstrapped;
 	}
 
-	_error = createBootstrapError(_lastError);
-	_available = false;
-	return { available: false, error: _error };
+	_bootstrapped = { available: false, error: createBootstrapError(_lastError) };
+	return _bootstrapped;
 }
