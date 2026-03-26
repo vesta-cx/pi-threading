@@ -1,45 +1,27 @@
 # pi-threading
 
-Recursive subagent orchestration framework for [pi](https://github.com/badlogic/pi-mono).
+Subagent orchestration framework scaffold for [pi](https://github.com/badlogic/pi-mono).
 
-Spawn specialist agent trees, steer them mid-work, route questions upward, and track everything in a persistent tree-state store.
+This repository currently provides the package structure, built-in agent definitions, prompt templates, and native SQLite bootstrap that later orchestration slices build on.
 
-## Install
+## Current status
 
-```bash
-pi install npm:pi-threading
-```
+Implemented in this scaffold:
 
-## What you get
+- package layout for `extensions/`, `src/`, `agents/`, and `prompts/`
+- `better-sqlite3` bootstrap with automatic `npm rebuild` fallback
+- root vs subagent mode detection in the extension entrypoint
+- built-in `scout`, `planner`, `reviewer`, and `worker` agent definitions
+- `/orchestrate` and `/scout-and-plan` prompt templates
 
-- **`spawn_subagent`** — non-blocking tool the LLM calls to delegate work
-- **`list_subagents`** / **`steer_subagent`** / **`stop_subagent`** — manage running agents
-- **`ask_question`** / **`finish_task`** — subagent-side coordination tools
-- **Live tree widget** — always-on visualization of the agent tree
-- **Question inbox** (Ctrl+I) — batch-answer pending questions
-- **`/orchestrate`** / **`/scout-and-plan`** — workflow prompt templates
-- **`/subagents`** / **`/dump`** / **`/clear`** / **`/threading`** — inspection and settings commands
+Planned in later slices:
 
-## Built-in agents
+- runtime and process management
+- orchestrator and subagent tools
+- question routing and idle wake-up
+- visualization, inbox, and management commands
 
-| Agent | Purpose | Model | Tools |
-|-------|---------|-------|-------|
-| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
-| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
-| `worker` | General implementation | Sonnet | all defaults |
-
-Define your own agents as markdown files in `~/.pi/agent/agents/` or `.pi/agents/`.
-
-## For extension authors
-
-pi-threading exposes a TypeScript API for building higher-level workflows:
-
-```typescript
-import { ThreadRuntime, AgentHandle } from "pi-threading";
-```
-
-See [PRD #1](https://github.com/mia-cx/pi-threading/issues/1) for the full design.
+See [PRD #1](https://github.com/mia-cx/pi-threading/issues/1) and the local `.plans/` directory for the full design and slice breakdown.
 
 ## Development
 
