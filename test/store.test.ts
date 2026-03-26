@@ -145,6 +145,32 @@ describe("agents", () => {
 		assert.equal(store.getAgent("nonexistent"), null);
 	});
 
+	it("rejects self-parenting", () => {
+		store.createTrunk({ id: "t1" });
+		assert.throws(
+			() => store.createAgent({ id: "a1", trunkId: "t1", parentAgentId: "a1", name: "ouroboros" }),
+			/cannot be its own parent/,
+		);
+	});
+
+	it("rejects cross-trunk parenting", () => {
+		store.createTrunk({ id: "t1" });
+		store.createTrunk({ id: "t2" });
+		store.createAgent({ id: "parent", trunkId: "t1", name: "root" });
+		assert.throws(
+			() => store.createAgent({ id: "child", trunkId: "t2", parentAgentId: "parent", name: "orphan" }),
+			/Cross-trunk parenting not allowed/,
+		);
+	});
+
+	it("rejects parenting under nonexistent agent", () => {
+		store.createTrunk({ id: "t1" });
+		assert.throws(
+			() => store.createAgent({ trunkId: "t1", parentAgentId: "ghost", name: "lost" }),
+			/Parent agent not found/,
+		);
+	});
+
 	it("config_json round-trips correctly", () => {
 		store.createTrunk({ id: "t1" });
 		const config = {

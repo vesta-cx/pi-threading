@@ -154,7 +154,10 @@ function runMigrations(db: any): void {
 	for (const migration of MIGRATIONS) {
 		if (applied.has(migration.version)) continue;
 		db.exec(migration.sql);
-		db.prepare("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)").run(migration.version, Date.now());
+		db.prepare("INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)").run(
+			migration.version,
+			Date.now(),
+		);
 	}
 }
 
@@ -232,6 +235,24 @@ class StoreImpl implements Store {
 
 	createAgent(params: CreateAgentParams): Agent {
 		const id = params.id ?? crypto.randomUUID();
+		const parentId = params.parentAgentId ?? null;
+
+		// Guard: no self-parenting (infinite recursion in CTEs)
+		if (parentId === id) {
+			throw new Error(`Agent cannot be its own parent: ${id}`);
+		}
+
+		// Guard: parent must belong to the same trunk (cross-trunk parenting breaks clearTrunk)
+		if (parentId) {
+			const parent = this.getAgent(parentId);
+			if (!parent) throw new Error(`Parent agent not found: ${parentId}`);
+			if (parent.trunkId !== params.trunkId) {
+				throw new Error(
+					`Cross-trunk parenting not allowed: agent trunk ${params.trunkId}, parent trunk ${parent.trunkId}`,
+				);
+			}
+		}
+
 		const now = Date.now();
 
 		this.db
@@ -242,7 +263,7 @@ class StoreImpl implements Store {
 			.run(
 				id,
 				params.trunkId,
-				params.parentAgentId ?? null,
+				parentId,
 				params.name,
 				params.displayName ?? null,
 				params.task ?? null,
