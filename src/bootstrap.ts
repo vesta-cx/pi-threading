@@ -6,8 +6,11 @@
  */
 
 import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
 
 let _bootstrapped = false;
 let _available = false;
