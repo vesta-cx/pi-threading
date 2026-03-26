@@ -1,28 +1,55 @@
 # pi-threading
 
-A minimal Pi extension scaffold for orchestrating specialist subagents.
+Recursive subagent orchestration framework for [pi](https://github.com/badlogic/pi-mono).
 
-## What this starter gives you
+Spawn specialist agent trees, steer them mid-work, route questions upward, and track everything in a persistent tree-state store.
 
-- A root `index.ts` extension entrypoint
-- A `/subagents` command placeholder
-- A status line hook so the extension is visible when loaded
-- A local `.references/` area for copied reference material and example implementations
+## Install
 
-## Reference workspace
+```bash
+pi install npm:pi-threading
+```
 
-Drop reference code and docs into `.references/` while you explore patterns from:
+## What you get
 
-- `@mariozechner/pi-coding-agent`
-- other pi extensions you want to study
-- local notes about orchestration, volatile state, or signaling ideas
+- **`spawn_subagent`** — non-blocking tool the LLM calls to delegate work
+- **`list_subagents`** / **`steer_subagent`** / **`stop_subagent`** — manage running agents
+- **`ask_question`** / **`finish_task`** — subagent-side coordination tools
+- **Live tree widget** — always-on visualization of the agent tree
+- **Question inbox** (Ctrl+I) — batch-answer pending questions
+- **`/orchestrate`** / **`/scout-and-plan`** — workflow prompt templates
+- **`/subagents`** / **`/dump`** / **`/clear`** / **`/threading`** — inspection and settings commands
 
-Anything under `.references/` is ignored by git, except this short README note.
+## Built-in agents
 
-## Next obvious step
+| Agent | Purpose | Model | Tools |
+|-------|---------|-------|-------|
+| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
+| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
+| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
+| `worker` | General implementation | Sonnet | all defaults |
 
-Add a real subagent registry and decide how to share ephemeral state between instances:
+Define your own agents as markdown files in `~/.pi/agent/agents/` or `.pi/agents/`.
 
-- session-backed state via `appendEntry`
-- disk-backed scratch data
-- in-memory signaling if multiple instances can coordinate
+## For extension authors
+
+pi-threading exposes a TypeScript API for building higher-level workflows:
+
+```typescript
+import { ThreadRuntime, AgentHandle } from "pi-threading";
+```
+
+See [PRD #1](https://github.com/mia-cx/pi-threading/issues/1) for the full design.
+
+## Development
+
+```bash
+git clone git@github.com:mia-cx/pi-threading.git
+cd pi-threading
+npm install
+pi -e .   # test locally
+```
+
+## License
+
+MIT
