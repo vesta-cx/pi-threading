@@ -55,7 +55,7 @@ export default function piThreading(pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 
 		if (!sqlite.available) {
-			ctx.ui.notify(`pi-threading: ${sqlite.error}`, "error");
+			ctx.ui.notify(sqlite.error, "error");
 			return;
 		}
 
