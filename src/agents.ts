@@ -95,6 +95,10 @@ function warnInvalidAgentFile(filePath: string, message: string): void {
 	console.warn(`pi-threading: skipping agent file ${filePath}: ${message}`);
 }
 
+function isUnset(value: unknown): value is undefined | null {
+	return value === undefined || value === null;
+}
+
 function describeValueType(value: unknown): string {
 	if (Array.isArray(value)) return "array";
 	if (value === null) return "null";
@@ -102,7 +106,7 @@ function describeValueType(value: unknown): string {
 }
 
 function parseOptionalString(value: unknown, filePath: string, fieldName: string): ParsedOptional<string> {
-	if (value === undefined) return undefined;
+	if (isUnset(value)) return undefined;
 	if (typeof value !== "string") {
 		warnInvalidAgentFile(filePath, `${fieldName} must be a string, got ${describeValueType(value)}`);
 		return INVALID_FRONTMATTER;
@@ -111,7 +115,7 @@ function parseOptionalString(value: unknown, filePath: string, fieldName: string
 }
 
 function parseOptionalBoolean(value: unknown, filePath: string, fieldName: string): ParsedOptional<boolean> {
-	if (value === undefined) return undefined;
+	if (isUnset(value)) return undefined;
 	if (typeof value !== "boolean") {
 		warnInvalidAgentFile(filePath, `${fieldName} must be a boolean, got ${describeValueType(value)}`);
 		return INVALID_FRONTMATTER;
@@ -120,7 +124,7 @@ function parseOptionalBoolean(value: unknown, filePath: string, fieldName: strin
 }
 
 function parseOptionalNumber(value: unknown, filePath: string, fieldName: string): ParsedOptional<number> {
-	if (value === undefined) return undefined;
+	if (isUnset(value)) return undefined;
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		warnInvalidAgentFile(filePath, `${fieldName} must be a finite number, got ${describeValueType(value)}`);
 		return INVALID_FRONTMATTER;
@@ -129,7 +133,7 @@ function parseOptionalNumber(value: unknown, filePath: string, fieldName: string
 }
 
 function parseOptionalStringList(value: unknown, filePath: string, fieldName: string): ParsedOptional<string[]> {
-	if (value === undefined) return undefined;
+	if (isUnset(value)) return undefined;
 	if (typeof value === "string") {
 		return value
 			.split(",")

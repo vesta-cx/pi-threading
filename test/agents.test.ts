@@ -123,6 +123,24 @@ tools: true
 
 Invalid types.`;
 
+const NULL_OPTIONALS_MD = `---
+name: nullable
+description: Accepts null optional fields
+model: ~
+thinking:
+tools: ~
+extensions:
+no_extensions: ~
+skills: ~
+no_skills:
+cwd: ~
+session_dir:
+no_session: ~
+max_turns: ~
+can_orchestrate:
+---
+
+Null optional values should be treated as unset.`;
 // ---------------------------------------------------------------------------
 // Custom test discoverer that uses fixture directories
 // ---------------------------------------------------------------------------
@@ -232,6 +250,33 @@ describe("frontmatter parsing", () => {
 		assert.equal(planner.noSession, undefined);
 		assert.equal(planner.maxTurns, undefined);
 		assert.equal(planner.canOrchestrate, undefined);
+	});
+
+	it("treats YAML null optional fields as unset", () => {
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "nullable.md"), NULL_OPTIONALS_MD);
+
+		const warnings = captureWarnings(() => {
+			const discoverer = createPiDiscoverer();
+			const agents = discoverer.discover(fixtureDir);
+			const nullable = agents.find((agent) => agent.filePath.startsWith(fixtureDir) && agent.name === "nullable");
+			assert.ok(nullable);
+			assert.equal(nullable.model, undefined);
+			assert.equal(nullable.thinking, undefined);
+			assert.equal(nullable.tools, undefined);
+			assert.equal(nullable.extensions, undefined);
+			assert.equal(nullable.noExtensions, undefined);
+			assert.equal(nullable.skills, undefined);
+			assert.equal(nullable.noSkills, undefined);
+			assert.equal(nullable.cwd, undefined);
+			assert.equal(nullable.sessionDir, undefined);
+			assert.equal(nullable.noSession, undefined);
+			assert.equal(nullable.maxTurns, undefined);
+			assert.equal(nullable.canOrchestrate, undefined);
+		});
+
+		assert.equal(warnings.length, 0);
 	});
 
 	it("skips files with invalid frontmatter types and warns", () => {
