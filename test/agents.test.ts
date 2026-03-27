@@ -338,10 +338,8 @@ describe("PiAgentDiscoverer", () => {
 
 	it("returns empty array when no .pi/agents/ exists", () => {
 		const discoverer = createPiDiscoverer();
-		// fixtureDir has no .pi/agents/
 		const agents = discoverer.discover(fixtureDir);
-		// May include user-level agents — just confirm no crash
-		assert.ok(Array.isArray(agents));
+		assert.equal(agents.length, 0);
 	});
 
 	it("walks up to find nearest .pi/agents/", () => {
