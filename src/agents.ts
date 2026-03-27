@@ -321,11 +321,17 @@ function findNearestProjectDotAgentsDir(cwd: string, userRootDir: string): strin
  * - User-level: `~/.pi/agent/agents/*.md` (flat)
  * - Project-local: `.pi/agents/*.md` (flat, nearest ancestor)
  */
+export interface PiAgentDiscovererOptions {
+	userDir?: string;
+}
+
 export class PiAgentDiscoverer implements AgentDiscoverer {
 	namespace = "";
 
+	constructor(private readonly options: PiAgentDiscovererOptions = {}) {}
+
 	discover(cwd: string): AgentConfig[] {
-		const userDir = path.join(getAgentDir(), "agents");
+		const userDir = this.options.userDir ?? path.join(getAgentDir(), "agents");
 		const projectDir = findNearestDir(cwd, ".pi", "agents");
 
 		// User agents first, project agents override by name
@@ -345,11 +351,17 @@ export class PiAgentDiscoverer implements AgentDiscoverer {
  *
  * Namespaced as `agents:`.
  */
+export interface DotAgentsDiscovererOptions {
+	userRootDir?: string;
+}
+
 export class DotAgentsDiscoverer implements AgentDiscoverer {
 	namespace = "agents";
 
+	constructor(private readonly options: DotAgentsDiscovererOptions = {}) {}
+
 	discover(cwd: string): AgentConfig[] {
-		const userRootDir = path.join(os.homedir(), ".agents");
+		const userRootDir = this.options.userRootDir ?? path.join(os.homedir(), ".agents");
 		const userDir = path.join(userRootDir, "agents");
 		const projectDir = findNearestProjectDotAgentsDir(cwd, userRootDir);
 
