@@ -18,6 +18,11 @@ interface BootstrapError {
 	recovery: string;
 }
 
+/**
+ * Result of attempting to load better-sqlite3.
+ * Check `available` before using the database — if `false`, `error` describes
+ * the failure and a suggested recovery command.
+ */
 export type BootstrapResult = { available: true; error: null } | { available: false; error: BootstrapError };
 
 let _result: BootstrapResult | null = null;
@@ -81,6 +86,13 @@ function tryRebuild(): boolean {
 	}
 }
 
+/**
+ * Load better-sqlite3, rebuilding the native addon if necessary.
+ *
+ * Results are cached — subsequent calls return the same outcome without
+ * re-attempting the load or rebuild. Safe to call from multiple entry
+ * points in the same process.
+ */
 export function bootstrapSqlite(): BootstrapResult {
 	if (_result) {
 		return _result;

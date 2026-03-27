@@ -18,7 +18,10 @@ import * as path from "node:path";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AgentConfig } from "./agents.js";
 
+/** Re-export of pi-agent-core's AgentMessage for convenience. */
 export type Message = AgentMessage;
+
+/** Session state snapshot returned by `getState()`. */
 export type RpcState = {
 	model?: unknown;
 	thinkingLevel: string;
@@ -34,6 +37,7 @@ export type RpcState = {
 	pendingMessageCount: number;
 };
 
+/** JSON response from the child pi process, correlated by `id`. */
 export type RpcResponse = {
 	id?: string;
 	type: "response";
@@ -43,6 +47,11 @@ export type RpcResponse = {
 	error?: string;
 };
 
+/**
+ * Extension UI request emitted by the child process on stdout.
+ * Uses an extensible base so later slices can attach extra fields
+ * (e.g. reasoning, context for question routing) without transport changes.
+ */
 type RpcExtensionUIRequestBase = {
 	type: "extension_ui_request";
 	id: string;
@@ -98,11 +107,13 @@ export type RpcExtensionUIRequest =
 			text: string;
 	  });
 
+/** Response sent to the child process to answer an `extension_ui_request`. */
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
+/** Error event emitted when an extension in the child process throws. */
 export interface RpcExtensionError {
 	type: "extension_error";
 	extensionPath: string;
@@ -110,11 +121,16 @@ export interface RpcExtensionError {
 	error: string;
 }
 
+/** Union of all event types that `RpcClient` can emit. */
 export type RpcClientEvent = AgentEvent | RpcExtensionUIRequest | RpcExtensionError;
+/** Narrowed type for `message_end` events (usage aggregation). */
 export type RpcMessageEndEvent = Extract<AgentEvent, { type: "message_end" }>;
+/** Narrowed type for `tool_execution_start` events (activity tracking). */
 export type RpcToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
+/** Narrowed type for `tool_execution_end` events. */
 export type RpcToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 
+/** Configuration for spawning a single pi subagent process. */
 export interface RpcClientOptions {
 	config: AgentConfig;
 	agentId: string;
@@ -128,6 +144,7 @@ export interface RpcClientOptions {
 	spawnImpl?: typeof spawn;
 }
 
+/** Resolved command + args for spawning the pi CLI. */
 export interface RpcInvocation {
 	command: string;
 	args: string[];
@@ -145,6 +162,13 @@ interface SpawnedProcess extends ChildProcess {
 	stdin: NonNullable<ChildProcess["stdin"]>;
 }
 
+/**
+ * Determine the correct command and args to spawn pi.
+ *
+ * Tries, in order: explicit `cliPath`, `process.argv[1]` (if the current
+ * process is pi), the executable name (if it's not a generic runtime like
+ * node/bun), and finally falls back to `"pi"` on `$PATH`.
+ */
 export function getPiInvocation(args: string[], cliPath?: string): RpcInvocation {
 	if (cliPath) {
 		return { command: process.execPath, args: [cliPath, ...args] };
@@ -164,6 +188,12 @@ export function getPiInvocation(args: string[], cliPath?: string): RpcInvocation
 	return { command: "pi", args };
 }
 
+/**
+ * Build the child process environment with `PI_THREADING_*` variables set.
+ *
+ * Inherits `process.env` and layers on trunk/agent/DB coordination vars
+ * plus any extra env from `options.env`.
+ */
 export function createThreadingEnv(options: RpcClientOptions): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 
@@ -183,6 +213,13 @@ export function createThreadingEnv(options: RpcClientOptions): NodeJS.ProcessEnv
 	return env;
 }
 
+/**
+ * Build the CLI argument list for `pi --mode rpc` from an agent config.
+ *
+ * Translates `AgentConfig` fields into the corresponding CLI flags:
+ * `--model`, `--thinking`, `--tools`, `--session`, `--append-system-prompt`,
+ * `--no-extensions`, `-e`, `--no-skills`, `--skill`.
+ */
 export function buildRpcArgs(config: AgentConfig, sessionPath: string, systemPromptPath?: string): string[] {
 	const args = ["--mode", "rpc"];
 
@@ -205,6 +242,16 @@ export function buildRpcArgs(config: AgentConfig, sessionPath: string, systemPro
 	return args;
 }
 
+/**
+ * Transport layer for a single spawned pi subagent process.
+ *
+ * Manages the child process lifecycle, writes JSONL commands to stdin,
+ * parses JSONL events from stdout with partial-line buffering, and
+ * correlates async request/response pairs by ID.
+ *
+ * Does NOT interpret agent behavior — lifecycle tracking, question routing,
+ * and result synthesis belong in `runtime.ts`.
+ */
 export class RpcClient extends EventEmitter {
 	private readonly spawnImpl: typeof spawn;
 	private readonly child: SpawnedProcess;
@@ -459,6 +506,7 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Read a system prompt file from disk. Utility for tests. */
 export function readSystemPromptFile(filePath: string): string {
 	return readFileSync(filePath, "utf8");
 }

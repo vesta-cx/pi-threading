@@ -15,6 +15,7 @@ import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 // Types
 // ---------------------------------------------------------------------------
 
+/** Fully parsed agent definition loaded from a markdown file's YAML frontmatter. */
 export interface AgentConfig {
 	name: string;
 	description: string;
@@ -47,6 +48,7 @@ export interface AgentDiscoverer {
 	discover(cwd: string): AgentConfig[];
 }
 
+/** Fields that can be overridden at spawn time without modifying the on-disk agent definition. */
 export interface InlineConfigOverrides {
 	model?: string;
 	thinking?: string;
@@ -326,9 +328,17 @@ function findNearestProjectDotAgentsDir(cwd: string, userRootDir: string): strin
  * - Project-local: `.pi/agents/*.md` (flat, nearest ancestor)
  */
 export interface PiAgentDiscovererOptions {
+	/** Override the user-level agents directory (default: `~/.pi/agent/agents`). Useful for testing. */
 	userDir?: string;
 }
 
+/**
+ * Discovers agents from pi-native directories:
+ * - User-level: `~/.pi/agent/agents/*.md` (flat scan)
+ * - Project-local: nearest ancestor `.pi/agents/*.md` (flat scan)
+ *
+ * Project-local agents override user-level agents with the same name.
+ */
 export class PiAgentDiscoverer implements AgentDiscoverer {
 	namespace = "";
 
@@ -356,9 +366,18 @@ export class PiAgentDiscoverer implements AgentDiscoverer {
  * Namespaced as `agents:`.
  */
 export interface DotAgentsDiscovererOptions {
+	/** Override the user-level `.agents` root (default: `~/.agents`). Useful for testing. */
 	userRootDir?: string;
 }
 
+/**
+ * Discovers agents from `.agents/` directories:
+ * - User-level: `~/.agents/agents/**\/*.md` (recursive scan)
+ * - Project-local: nearest ancestor `.agents/**\/*.md` (recursive scan)
+ *
+ * The user-level root (`~/.agents`) is excluded from project-local search
+ * to avoid double-loading. Namespaced as `agents:`.
+ */
 export class DotAgentsDiscoverer implements AgentDiscoverer {
 	namespace = "agents";
 
@@ -390,6 +409,15 @@ export class DotAgentsDiscoverer implements AgentDiscoverer {
  * 2. If bare (`scout`), search pi-native first, then other discoverers, by name then alias.
  *
  * Returns null if no agent matches.
+ */
+/**
+ * Resolve an agent by name, alias, or `namespace:name` reference.
+ *
+ * - Bare names (`scout`) search pi-native discoverers first, then others.
+ * - Namespaced names (`agents:scout`) search only matching discoverers.
+ * - Alias resolution is checked after name miss, scoped within each namespace.
+ *
+ * @returns The first matching `AgentConfig`, or `null` if no agent matches.
  */
 export function resolveAgent(nameOrRef: string, discoverers: AgentDiscoverer[], cwd: string): AgentConfig | null {
 	const colonIdx = nameOrRef.indexOf(":");
@@ -440,6 +468,14 @@ function findByNameOrAlias(name: string, agents: AgentConfig[]): AgentConfig | n
  * Merge a disk-loaded config with inline overrides.
  * Inline values replace disk values; `undefined` inline values are skipped.
  * `systemPrompt` from inline replaces entirely (not appended).
+ */
+/**
+ * Merge inline spawn-time overrides onto a disk-loaded agent config.
+ *
+ * `undefined` override values are skipped (disk value preserved).
+ * `systemPrompt` from overrides replaces the disk value entirely — it is
+ * not appended. Identity fields (`name`, `description`, `aliases`, `source`,
+ * `filePath`) always come from the disk config.
  */
 export function mergeConfigs(disk: AgentConfig, overrides: InlineConfigOverrides): AgentConfig {
 	return {

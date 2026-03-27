@@ -15,8 +15,10 @@ const Database = require("better-sqlite3");
 // Types
 // ---------------------------------------------------------------------------
 
+/** Lifecycle state of an orchestration trunk (tree root). */
 export type TrunkStatus = "active" | "completed" | "abandoned";
 
+/** Lifecycle state of an individual agent within a trunk. */
 export type AgentStatus = "spawned" | "running" | "exited" | "crashed" | "killed";
 
 const VALID_AGENT_TRANSITIONS: Record<AgentStatus, readonly AgentStatus[]> = {
@@ -27,6 +29,7 @@ const VALID_AGENT_TRANSITIONS: Record<AgentStatus, readonly AgentStatus[]> = {
 	killed: [],
 };
 
+/** Persistent record of an orchestration tree root. */
 export interface Trunk {
 	id: string;
 	parentTrunkId: string | null;
@@ -35,6 +38,7 @@ export interface Trunk {
 	rootSessionPath: string | null;
 }
 
+/** Cumulative token and cost usage for a single agent. */
 export interface AgentUsage {
 	input: number;
 	output: number;
@@ -45,6 +49,7 @@ export interface AgentUsage {
 	turns: number;
 }
 
+/** Persistent record of a single agent within a trunk. */
 export interface Agent {
 	id: string;
 	trunkId: string;
@@ -60,12 +65,14 @@ export interface Agent {
 	exitedAt: number | null;
 }
 
+/** Parameters for creating a new trunk. All fields optional — `id` is auto-generated if omitted. */
 export interface CreateTrunkParams {
 	id?: string;
 	parentTrunkId?: string | null;
 	rootSessionPath?: string | null;
 }
 
+/** Parameters for creating a new agent. `trunkId` and `name` are required; `id` is auto-generated if omitted. */
 export interface CreateAgentParams {
 	id?: string;
 	trunkId: string;
@@ -77,23 +84,45 @@ export interface CreateAgentParams {
 	config?: Record<string, unknown> | null;
 }
 
+/**
+ * Synchronous data-access interface for the tree-state SQLite database.
+ *
+ * All operations are synchronous (better-sqlite3 is sync by design).
+ * One `Store` instance per database file; share across the process.
+ */
 export interface Store {
+	/** Create a new orchestration trunk and return its persisted record. */
 	createTrunk(params: CreateTrunkParams): Trunk;
+	/** Look up a trunk by ID. Returns `null` if not found. */
 	getTrunk(id: string): Trunk | null;
+	/** Transition a trunk to a new status. Throws if the trunk does not exist. */
 	updateTrunkStatus(id: string, status: TrunkStatus): void;
 
+	/**
+	 * Create a new agent within a trunk.
+	 * Rejects self-parenting, missing parents, and cross-trunk parenting.
+	 */
 	createAgent(params: CreateAgentParams): Agent;
+	/** Look up an agent by ID. Returns `null` if not found. */
 	getAgent(id: string): Agent | null;
+	/** Transition an agent to a new status. Enforces the status state machine. */
 	updateAgentStatus(id: string, status: AgentStatus): void;
+	/** Replace an agent's cumulative usage record. */
 	updateAgentUsage(id: string, usage: AgentUsage): void;
 
+	/** Return all direct children of the given agent. */
 	getChildren(agentId: string): Agent[];
+	/** Return all descendants of the given agent (recursive, breadth-first). */
 	getSubtree(agentId: string): Agent[];
+	/** Return the ancestor chain from root to the given agent (root-first). */
 	getAncestors(agentId: string): Agent[];
 
+	/** Sum the `cost` field across all agents in a trunk. */
 	getTreeCost(trunkId: string): number;
+	/** Atomically delete all agents and the trunk row for the given trunk. */
 	clearTrunk(trunkId: string): void;
 
+	/** Close the underlying database connection. */
 	close(): void;
 }
 
@@ -393,6 +422,14 @@ class StoreImpl implements Store {
 /**
  * Open or create a store at the given path.
  * Pass `:memory:` for an ephemeral in-memory database (useful for tests).
+ */
+/**
+ * Open (or create) a tree-state SQLite database at `dbPath`.
+ *
+ * Runs schema migrations on first open. Uses WAL mode, foreign keys,
+ * and a 5-second busy timeout for concurrent writer safety.
+ *
+ * @param dbPath - File path for the database, or `":memory:"` for tests.
  */
 export function createStore(dbPath: string): Store {
 	const db = new Database(dbPath);
