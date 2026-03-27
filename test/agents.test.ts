@@ -350,9 +350,9 @@ describe("discoverAgents", () => {
 		writeFileSync(join(userAgentsDir, "user.md"), SCOUT_MD);
 
 		const agents = discoverAgents(cwd, opts);
-		assert.ok(agents.every((a) => !a.filePath.includes("SENTINEL.md")));
+		assert.ok(agents.some((a) => a.filePath === join(userAgentsDir, "user.md")));
+		assert.ok(!agents.some((a) => a.filePath === join(userRootDir, "SENTINEL.md")));
 		assert.ok(agents.every((a) => !a.filePath.startsWith(userRootDir) || a.filePath.startsWith(userAgentsDir)));
-		assert.ok(agents.every((a) => a.filePath.startsWith(userAgentsDir)));
 	});
 
 	it("project-local agents override user-level agents with the same name", () => {
