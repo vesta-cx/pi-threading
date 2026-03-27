@@ -103,6 +103,14 @@ tools: true
 
 Invalid types.`;
 
+const INVALID_OPTIONAL_TYPES_MD = `---
+name: optional-invalid
+description: Valid required fields
+aliases: [recon, 1]
+---
+
+Invalid optional types.`;
+
 const NULL_OPTIONALS_MD = `---
 name: nullable
 description: Accepts null optional fields
@@ -241,6 +249,20 @@ describe("frontmatter parsing", () => {
 		assert.ok(warnings.some((w) => w.includes("name and description must be non-empty strings")));
 	});
 
+	it("skips files with invalid optional frontmatter fields and warns", () => {
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "optional-invalid.md"), INVALID_OPTIONAL_TYPES_MD);
+
+		const warnings = captureWarnings(() => {
+			const agents = discoverAgents(fixtureDir, opts);
+			const local = agents.filter((a) => a.filePath.startsWith(fixtureDir));
+			assert.equal(local.length, 0);
+		});
+
+		assert.ok(warnings.some((w) => w.includes("aliases must contain only strings")));
+	});
+
 	it("warns and skips unreadable symlinked files", () => {
 		const piDir = join(fixtureDir, ".pi", "agents");
 		mkdirSync(piDir, { recursive: true });
@@ -324,12 +346,13 @@ describe("discoverAgents", () => {
 		const cwd = mkdtempSync(join(projectsDir, "test-cwd-"));
 		const userRootDir = dotAgentsUserRootDir;
 		const userAgentsDir = join(userRootDir, "agents");
+		writeFileSync(join(userRootDir, "SENTINEL.md"), SCOUT_MD);
+		writeFileSync(join(userAgentsDir, "user.md"), SCOUT_MD);
 
 		const agents = discoverAgents(cwd, opts);
-		assert.ok(
-			agents.every((a) => !a.filePath.startsWith(userRootDir) || a.filePath.startsWith(userAgentsDir)),
-			"should only load from <userRoot>/agents, not recurse through <userRoot> as a project dir",
-		);
+		assert.ok(agents.every((a) => !a.filePath.includes("SENTINEL.md")));
+		assert.ok(agents.every((a) => !a.filePath.startsWith(userRootDir) || a.filePath.startsWith(userAgentsDir)));
+		assert.ok(agents.every((a) => a.filePath.startsWith(userAgentsDir)));
 	});
 
 	it("project-local agents override user-level agents with the same name", () => {
