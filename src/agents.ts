@@ -7,6 +7,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
@@ -72,7 +73,7 @@ interface RawFrontmatter {
 	aliases?: string[] | string;
 	model?: string;
 	thinking?: string;
-	tools?: string;
+	tools?: string[] | string;
 	extensions?: string[] | string;
 	no_extensions?: boolean;
 	skills?: string[] | string;
@@ -106,7 +107,9 @@ function parseAgentFile(filePath: string, source: string): AgentConfig | null {
 	let content: string;
 	try {
 		content = fs.readFileSync(filePath, "utf-8");
-	} catch {
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.warn(`pi-threading: unable to read agent file ${filePath}: ${message}`);
 		return null;
 	}
 
@@ -254,8 +257,10 @@ export class DotAgentsDiscoverer implements AgentDiscoverer {
 	namespace = "agents";
 
 	discover(cwd: string): AgentConfig[] {
-		const userDir = path.join(process.env.HOME ?? "~", ".agents", "agents");
-		const projectDir = findNearestDir(cwd, ".agents");
+		const userRootDir = path.join(os.homedir(), ".agents");
+		const userDir = path.join(userRootDir, "agents");
+		const nearestDir = findNearestDir(cwd, ".agents");
+		const projectDir = nearestDir === userRootDir ? null : nearestDir;
 
 		const agents = new Map<string, AgentConfig>();
 		for (const a of loadAgentsRecursive(userDir, "agents")) agents.set(a.name, a);
@@ -291,14 +296,13 @@ export function resolveAgent(nameOrRef: string, discoverers: AgentDiscoverer[], 
 		return findByNameOrAlias(name, discoverer.discover(cwd));
 	}
 
-	// Bare name: search pi-native (namespace "") first, then others
-	const sorted = [...discoverers].sort((a, b) => {
-		if (a.namespace === "") return -1;
-		if (b.namespace === "") return 1;
-		return 0;
-	});
+	// Bare name: search pi-native (namespace "") first, then preserve original order for the rest.
+	const piDiscoverer = discoverers.find((discoverer) => discoverer.namespace === "");
+	const ordered = piDiscoverer
+		? [piDiscoverer, ...discoverers.filter((discoverer) => discoverer !== piDiscoverer)]
+		: discoverers;
 
-	for (const discoverer of sorted) {
+	for (const discoverer of ordered) {
 		const match = findByNameOrAlias(name, discoverer.discover(cwd));
 		if (match) return match;
 	}

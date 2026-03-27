@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
@@ -161,8 +161,10 @@ describe("frontmatter parsing", () => {
 
 		const discoverer = new PiAgentDiscoverer();
 		const agents = discoverer.discover(fixtureDir);
-		assert.equal(agents.length, 1);
-		assert.equal(agents[0].name, "scout");
+		// Filter to fixture-dir agents only — user-level ~/.pi/agent/agents/ may also contribute
+		const local = agents.filter((a) => a.filePath?.startsWith(fixtureDir));
+		assert.equal(local.length, 1);
+		assert.equal(local[0].name, "scout");
 	});
 
 	it("skips files missing name or description", () => {
@@ -172,7 +174,9 @@ describe("frontmatter parsing", () => {
 
 		const discoverer = new PiAgentDiscoverer();
 		const agents = discoverer.discover(fixtureDir);
-		assert.equal(agents.length, 0);
+		// Filter to fixture-dir agents only — user-level ~/.pi/agent/agents/ may also contribute
+		const local = agents.filter((a) => a.filePath?.startsWith(fixtureDir));
+		assert.equal(local.length, 0);
 	});
 
 	it("missing optional fields produce undefined", () => {
@@ -209,8 +213,9 @@ describe("PiAgentDiscoverer", () => {
 
 		const discoverer = new PiAgentDiscoverer();
 		const agents = discoverer.discover(fixtureDir);
-		const names = agents.map((a) => a.name).sort();
-		assert.deepEqual(names, ["planner", "scout"]);
+		const names = agents.map((a) => a.name);
+		assert.ok(names.includes("scout"), "should find project-local scout");
+		assert.ok(names.includes("planner"), "should find project-local planner");
 	});
 
 	it("returns empty array when no .pi/agents/ exists", () => {
@@ -247,6 +252,22 @@ describe("DotAgentsDiscoverer", () => {
 		const names = agents.map((a) => a.name).sort();
 		assert.ok(names.includes("scout"), "should find top-level scout");
 		assert.ok(names.includes("planner"), "should find nested planner");
+	});
+
+	it("does not treat ~/.agents as a project-local directory", () => {
+		const cwd = mkdtempSync(join(homedir(), "pi-threading-agents-cwd-"));
+		try {
+			const discoverer = new DotAgentsDiscoverer();
+			const agents = discoverer.discover(cwd);
+			const userRootDir = join(homedir(), ".agents");
+			const userAgentsDir = join(userRootDir, "agents");
+			assert.ok(
+				agents.every((agent) => !agent.filePath.startsWith(userRootDir) || agent.filePath.startsWith(userAgentsDir)),
+				"should only load user-level agents from ~/.agents/agents, not recurse through ~/.agents as a project dir",
+			);
+		} finally {
+			rmSync(cwd, { recursive: true });
+		}
 	});
 
 	it("has namespace 'agents'", () => {
