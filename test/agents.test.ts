@@ -9,14 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import {
-	type AgentConfig,
-	type AgentDiscoverer,
-	DotAgentsDiscoverer,
-	mergeConfigs,
-	PiAgentDiscoverer,
-	resolveAgent,
-} from "../src/agents.js";
+import { type AgentConfig, type DiscoverOptions, discoverAgents, mergeConfigs, resolveAgent } from "../src/agents.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -25,11 +18,13 @@ import {
 let fixtureDir: string;
 let piUserDir: string;
 let dotAgentsUserRootDir: string;
+let opts: DiscoverOptions;
 
 beforeEach(() => {
 	fixtureDir = mkdtempSync(join(tmpdir(), "agents-test-"));
 	piUserDir = join(fixtureDir, "user", ".pi", "agent", "agents");
 	dotAgentsUserRootDir = join(fixtureDir, "user", ".agents");
+	opts = { piUserDir, dotAgentsUserRootDir };
 	mkdirSync(piUserDir, { recursive: true });
 	mkdirSync(join(dotAgentsUserRootDir, "agents"), { recursive: true });
 });
@@ -37,13 +32,6 @@ beforeEach(() => {
 afterEach(() => {
 	rmSync(fixtureDir, { recursive: true });
 });
-
-function writeFixture(relativePath: string, content: string): string {
-	const full = join(fixtureDir, relativePath);
-	mkdirSync(join(full, ".."), { recursive: true });
-	writeFileSync(full, content, "utf-8");
-	return full;
-}
 
 function captureWarnings(fn: () => void): string[] {
 	const warnings: string[] = [];
@@ -57,14 +45,6 @@ function captureWarnings(fn: () => void): string[] {
 		console.warn = originalWarn;
 	}
 	return warnings;
-}
-
-function createPiDiscoverer(): PiAgentDiscoverer {
-	return new PiAgentDiscoverer({ userDir: piUserDir });
-}
-
-function createDotAgentsDiscoverer(): DotAgentsDiscoverer {
-	return new DotAgentsDiscoverer({ userRootDir: dotAgentsUserRootDir });
 }
 
 const SCOUT_MD = `---
@@ -141,45 +121,18 @@ can_orchestrate:
 ---
 
 Null optional values should be treated as unset.`;
-// ---------------------------------------------------------------------------
-// Custom test discoverer that uses fixture directories
-// ---------------------------------------------------------------------------
-
-class FixtureDiscoverer implements AgentDiscoverer {
-	namespace: string;
-	private agents: AgentConfig[];
-
-	constructor(namespace: string, agents: AgentConfig[]) {
-		this.namespace = namespace;
-		this.agents = agents;
-	}
-
-	discover(_cwd: string): AgentConfig[] {
-		return this.agents;
-	}
-}
 
 // ---------------------------------------------------------------------------
-// Frontmatter parsing (via parseAgentFile, tested through discoverers)
+// Frontmatter parsing (tested through discoverAgents)
 // ---------------------------------------------------------------------------
 
 describe("frontmatter parsing", () => {
 	it("parses all frontmatter keys correctly", () => {
-		const dir = join(fixtureDir, "agents");
-		mkdirSync(dir, { recursive: true });
-		writeFixture("agents/scout.md", SCOUT_MD);
-
-		// Use PiAgentDiscoverer with a cwd that has .pi/agents
 		const piDir = join(fixtureDir, ".pi", "agents");
 		mkdirSync(piDir, { recursive: true });
 		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
 
-		const discoverer = createPiDiscoverer();
-		// We need to override getAgentDir — instead, test via resolveAgent with a FixtureDiscoverer
-		// Actually, let's just test parseAgentFile indirectly through a custom discoverer setup
-
-		// Simplest approach: put files where PiAgentDiscoverer looks (project-local)
-		const agents = discoverer.discover(fixtureDir);
+		const agents = discoverAgents(fixtureDir, opts);
 		const scout = agents.find((a) => a.name === "scout");
 		assert.ok(scout, "scout should be discovered");
 		assert.equal(scout.name, "scout");
@@ -198,8 +151,7 @@ describe("frontmatter parsing", () => {
 		mkdirSync(piDir, { recursive: true });
 		writeFileSync(join(piDir, "worker.md"), WORKER_MD);
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
+		const agents = discoverAgents(fixtureDir, opts);
 		const worker = agents.find((a) => a.name === "worker");
 		assert.ok(worker);
 		assert.equal(worker.noExtensions, true);
@@ -214,9 +166,8 @@ describe("frontmatter parsing", () => {
 		writeFileSync(join(piDir, "bad.md"), MALFORMED_MD);
 		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
-		const local = agents.filter((agent) => agent.filePath.startsWith(fixtureDir));
+		const agents = discoverAgents(fixtureDir, opts);
+		const local = agents.filter((a) => a.filePath.startsWith(fixtureDir));
 		assert.equal(local.length, 1);
 		assert.equal(local[0].name, "scout");
 	});
@@ -226,9 +177,8 @@ describe("frontmatter parsing", () => {
 		mkdirSync(piDir, { recursive: true });
 		writeFileSync(join(piDir, "incomplete.md"), MISSING_FIELDS_MD);
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
-		const local = agents.filter((agent) => agent.filePath.startsWith(fixtureDir));
+		const agents = discoverAgents(fixtureDir, opts);
+		const local = agents.filter((a) => a.filePath.startsWith(fixtureDir));
 		assert.equal(local.length, 0);
 	});
 
@@ -237,8 +187,7 @@ describe("frontmatter parsing", () => {
 		mkdirSync(piDir, { recursive: true });
 		writeFileSync(join(piDir, "planner.md"), PLANNER_MD);
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
+		const agents = discoverAgents(fixtureDir, opts);
 		const planner = agents.find((a) => a.filePath.startsWith(fixtureDir) && a.name === "planner");
 		assert.ok(planner);
 		assert.equal(planner.extensions, undefined);
@@ -258,9 +207,8 @@ describe("frontmatter parsing", () => {
 		writeFileSync(join(piDir, "nullable.md"), NULL_OPTIONALS_MD);
 
 		const warnings = captureWarnings(() => {
-			const discoverer = createPiDiscoverer();
-			const agents = discoverer.discover(fixtureDir);
-			const nullable = agents.find((agent) => agent.filePath.startsWith(fixtureDir) && agent.name === "nullable");
+			const agents = discoverAgents(fixtureDir, opts);
+			const nullable = agents.find((a) => a.filePath.startsWith(fixtureDir) && a.name === "nullable");
 			assert.ok(nullable);
 			assert.equal(nullable.model, undefined);
 			assert.equal(nullable.thinking, undefined);
@@ -285,13 +233,12 @@ describe("frontmatter parsing", () => {
 		writeFileSync(join(piDir, "invalid.md"), INVALID_TYPES_MD);
 
 		const warnings = captureWarnings(() => {
-			const discoverer = createPiDiscoverer();
-			const agents = discoverer.discover(fixtureDir);
-			const local = agents.filter((agent) => agent.filePath.startsWith(fixtureDir));
+			const agents = discoverAgents(fixtureDir, opts);
+			const local = agents.filter((a) => a.filePath.startsWith(fixtureDir));
 			assert.equal(local.length, 0);
 		});
 
-		assert.ok(warnings.some((warning) => warning.includes("name and description must be non-empty strings")));
+		assert.ok(warnings.some((w) => w.includes("name and description must be non-empty strings")));
 	});
 
 	it("warns and skips unreadable symlinked files", () => {
@@ -300,13 +247,12 @@ describe("frontmatter parsing", () => {
 		symlinkSync(join(fixtureDir, "missing-target.md"), join(piDir, "broken.md"));
 
 		const warnings = captureWarnings(() => {
-			const discoverer = createPiDiscoverer();
-			const agents = discoverer.discover(fixtureDir);
-			const local = agents.filter((agent) => agent.filePath.startsWith(fixtureDir));
+			const agents = discoverAgents(fixtureDir, opts);
+			const local = agents.filter((a) => a.filePath.startsWith(fixtureDir));
 			assert.equal(local.length, 0);
 		});
 
-		assert.ok(warnings.some((warning) => warning.includes("unable to read agent file")));
+		assert.ok(warnings.some((w) => w.includes("unable to read agent file")));
 	});
 });
 
@@ -314,13 +260,12 @@ describe("frontmatter parsing", () => {
 // Discovery sources
 // ---------------------------------------------------------------------------
 
-describe("PiAgentDiscoverer", () => {
-	it("discovers from injected user dir", () => {
+describe("discoverAgents", () => {
+	it("discovers from injected pi user dir", () => {
 		writeFileSync(join(piUserDir, "scout.md"), SCOUT_MD);
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
-		assert.ok(agents.some((agent) => agent.filePath === join(piUserDir, "scout.md")));
+		const agents = discoverAgents(fixtureDir, opts);
+		assert.ok(agents.some((a) => a.filePath === join(piUserDir, "scout.md")));
 	});
 
 	it("discovers from .pi/agents/ (project-local)", () => {
@@ -329,16 +274,14 @@ describe("PiAgentDiscoverer", () => {
 		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
 		writeFileSync(join(piDir, "planner.md"), PLANNER_MD);
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
+		const agents = discoverAgents(fixtureDir, opts);
 		const names = agents.map((a) => a.name);
-		assert.ok(names.includes("scout"), "should find project-local scout");
-		assert.ok(names.includes("planner"), "should find project-local planner");
+		assert.ok(names.includes("scout"));
+		assert.ok(names.includes("planner"));
 	});
 
-	it("returns empty array when no .pi/agents/ exists", () => {
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
+	it("returns empty array when no agent dirs exist", () => {
+		const agents = discoverAgents(fixtureDir, opts);
 		assert.equal(agents.length, 0);
 	});
 
@@ -350,21 +293,8 @@ describe("PiAgentDiscoverer", () => {
 		const nested = join(fixtureDir, "src", "deep", "nested");
 		mkdirSync(nested, { recursive: true });
 
-		const discoverer = createPiDiscoverer();
-		const agents = discoverer.discover(nested);
+		const agents = discoverAgents(nested, opts);
 		assert.ok(agents.some((a) => a.name === "scout"));
-	});
-});
-
-describe("DotAgentsDiscoverer", () => {
-	it("discovers from injected user root recursively", () => {
-		const userAgentsDir = join(dotAgentsUserRootDir, "agents", "team");
-		mkdirSync(userAgentsDir, { recursive: true });
-		writeFileSync(join(userAgentsDir, "scout.md"), SCOUT_MD);
-
-		const discoverer = createDotAgentsDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
-		assert.ok(agents.some((agent) => agent.filePath === join(userAgentsDir, "scout.md")));
 	});
 
 	it("discovers recursively from .agents/ (project-local)", () => {
@@ -373,31 +303,46 @@ describe("DotAgentsDiscoverer", () => {
 		writeFileSync(join(agentsDir, "scout.md"), SCOUT_MD);
 		writeFileSync(join(agentsDir, "sub", "planner.md"), PLANNER_MD);
 
-		const discoverer = createDotAgentsDiscoverer();
-		const agents = discoverer.discover(fixtureDir);
-		const names = agents.map((a) => a.name).sort();
-		assert.ok(names.includes("scout"), "should find top-level scout");
-		assert.ok(names.includes("planner"), "should find nested planner");
+		const agents = discoverAgents(fixtureDir, opts);
+		const names = agents.map((a) => a.name);
+		assert.ok(names.includes("scout"));
+		assert.ok(names.includes("planner"));
 	});
 
-	it("does not treat the injected user root as a project-local directory", () => {
+	it("discovers from injected .agents user root recursively", () => {
+		const userAgentsDir = join(dotAgentsUserRootDir, "agents", "team");
+		mkdirSync(userAgentsDir, { recursive: true });
+		writeFileSync(join(userAgentsDir, "scout.md"), SCOUT_MD);
+
+		const agents = discoverAgents(fixtureDir, opts);
+		assert.ok(agents.some((a) => a.filePath === join(userAgentsDir, "scout.md")));
+	});
+
+	it("does not treat the user .agents root as a project-local directory", () => {
 		const projectsDir = join(fixtureDir, "user", "projects");
 		mkdirSync(projectsDir, { recursive: true });
-		const cwd = mkdtempSync(join(projectsDir, "pi-threading-agents-cwd-"));
+		const cwd = mkdtempSync(join(projectsDir, "test-cwd-"));
 		const userRootDir = dotAgentsUserRootDir;
 		const userAgentsDir = join(userRootDir, "agents");
 
-		const discoverer = createDotAgentsDiscoverer();
-		const agents = discoverer.discover(cwd);
+		const agents = discoverAgents(cwd, opts);
 		assert.ok(
-			agents.every((agent) => !agent.filePath.startsWith(userRootDir) || agent.filePath.startsWith(userAgentsDir)),
-			"should only load user-level agents from <userRoot>/.agents/agents, not recurse through <userRoot>/.agents as a project dir",
+			agents.every((a) => !a.filePath.startsWith(userRootDir) || a.filePath.startsWith(userAgentsDir)),
+			"should only load from <userRoot>/agents, not recurse through <userRoot> as a project dir",
 		);
 	});
 
-	it("has namespace 'agents'", () => {
-		const discoverer = createDotAgentsDiscoverer();
-		assert.equal(discoverer.namespace, "agents");
+	it("project-local agents override user-level agents with the same name", () => {
+		writeFileSync(join(piUserDir, "scout.md"), SCOUT_MD);
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		const overrideScout = SCOUT_MD.replace("Fast recon agent", "Project-local scout");
+		writeFileSync(join(piDir, "scout.md"), overrideScout);
+
+		const agents = discoverAgents(fixtureDir, opts);
+		const scout = agents.find((a) => a.name === "scout");
+		assert.ok(scout);
+		assert.equal(scout.description, "Project-local scout");
 	});
 });
 
@@ -406,118 +351,72 @@ describe("DotAgentsDiscoverer", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveAgent", () => {
-	const scoutConfig: AgentConfig = {
-		name: "scout",
-		description: "Pi scout",
-		aliases: ["recon"],
-		systemPrompt: "You are a scout.",
-		source: "pi",
-		filePath: "/fake/scout.md",
-	};
+	it("bare name resolves pi-source first", () => {
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
 
-	const agentsScoutConfig: AgentConfig = {
-		name: "scout",
-		description: ".agents scout",
-		aliases: ["spotter"],
-		systemPrompt: "You are a .agents scout.",
-		source: "agents",
-		filePath: "/fake/.agents/scout.md",
-	};
+		const agentsDir = join(fixtureDir, ".agents");
+		mkdirSync(agentsDir, { recursive: true });
+		const altScout = SCOUT_MD.replace("Fast recon agent", ".agents scout");
+		writeFileSync(join(agentsDir, "scout.md"), altScout);
 
-	const workerConfig: AgentConfig = {
-		name: "worker",
-		description: "Worker",
-		aliases: ["builder", "dev"],
-		systemPrompt: "You are a worker.",
-		source: "pi",
-		filePath: "/fake/worker.md",
-	};
-
-	const discoverers: AgentDiscoverer[] = [
-		new FixtureDiscoverer("", [scoutConfig, workerConfig]),
-		new FixtureDiscoverer("agents", [agentsScoutConfig]),
-	];
-
-	it("bare name resolves pi-native first", () => {
-		const result = resolveAgent("scout", discoverers, "/fake");
+		const result = resolveAgent("scout", fixtureDir, opts);
 		assert.ok(result);
 		assert.equal(result.source, "pi");
-		assert.equal(result.description, "Pi scout");
+		assert.equal(result.description, "Fast recon agent");
 	});
 
 	it("namespaced name resolves to correct source", () => {
-		const result = resolveAgent("agents:scout", discoverers, "/fake");
+		const agentsDir = join(fixtureDir, ".agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(join(agentsDir, "scout.md"), SCOUT_MD);
+
+		const result = resolveAgent("agents:scout", fixtureDir, opts);
 		assert.ok(result);
 		assert.equal(result.source, "agents");
-		assert.equal(result.description, ".agents scout");
-	});
-
-	it("namespaced lookup searches every matching discoverer in order", () => {
-		const laterDiscoverers: AgentDiscoverer[] = [
-			new FixtureDiscoverer("agents", []),
-			new FixtureDiscoverer("agents", [agentsScoutConfig]),
-		];
-
-		const result = resolveAgent("agents:scout", laterDiscoverers, "/fake");
-		assert.ok(result);
-		assert.equal(result.source, "agents");
-		assert.equal(result.description, ".agents scout");
 	});
 
 	it("alias resolution works for bare names", () => {
-		const result = resolveAgent("recon", discoverers, "/fake");
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
+
+		const result = resolveAgent("recon", fixtureDir, opts);
 		assert.ok(result);
 		assert.equal(result.name, "scout");
-		assert.equal(result.source, "pi");
 	});
 
 	it("alias resolution works within namespace", () => {
-		const result = resolveAgent("agents:spotter", discoverers, "/fake");
+		const agentsDir = join(fixtureDir, ".agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(join(agentsDir, "scout.md"), SCOUT_MD);
+
+		const result = resolveAgent("agents:recon", fixtureDir, opts);
 		assert.ok(result);
 		assert.equal(result.name, "scout");
-		assert.equal(result.source, "agents");
 	});
 
-	it("bare alias falls through to other namespaces", () => {
-		// "spotter" is an alias only in agents namespace — bare search finds it after pi misses
-		const result = resolveAgent("spotter", discoverers, "/fake");
-		assert.ok(result);
-		assert.equal(result.source, "agents");
-	});
+	it("namespaced alias does not cross sources", () => {
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
 
-	it("bare lookups search all pi-native discoverers before other namespaces", () => {
-		const extraPiScout: AgentConfig = {
-			name: "scout",
-			description: "Second pi scout",
-			aliases: [],
-			systemPrompt: "You are another scout.",
-			source: "pi",
-			filePath: "/fake/second-scout.md",
-		};
-		const orderedDiscoverers: AgentDiscoverer[] = [
-			new FixtureDiscoverer("agents", [agentsScoutConfig]),
-			new FixtureDiscoverer("", [extraPiScout]),
-			new FixtureDiscoverer("", [scoutConfig]),
-		];
-
-		const result = resolveAgent("scout", orderedDiscoverers, "/fake");
-		assert.ok(result);
-		assert.equal(result.source, "pi");
-		assert.equal(result.description, "Second pi scout");
-	});
-
-	it("namespaced alias does not cross namespaces", () => {
-		// "recon" is a pi-native alias — it should not resolve via agents: prefix
-		const result = resolveAgent("agents:recon", discoverers, "/fake");
+		// "recon" is a pi-source alias — should not resolve via agents: prefix
+		const result = resolveAgent("agents:recon", fixtureDir, opts);
 		assert.equal(result, null);
 	});
 
 	it("returns null for unknown name", () => {
-		assert.equal(resolveAgent("nonexistent", discoverers, "/fake"), null);
+		assert.equal(resolveAgent("nonexistent", fixtureDir, opts), null);
 	});
 
 	it("returns null for unknown namespace", () => {
-		assert.equal(resolveAgent("custom:scout", discoverers, "/fake"), null);
+		const piDir = join(fixtureDir, ".pi", "agents");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(join(piDir, "scout.md"), SCOUT_MD);
+
+		assert.equal(resolveAgent("custom:scout", fixtureDir, opts), null);
 	});
 });
 
@@ -542,7 +441,6 @@ describe("mergeConfigs", () => {
 		const merged = mergeConfigs(base, { model: "claude-sonnet-4-5", thinking: "high" });
 		assert.equal(merged.model, "claude-sonnet-4-5");
 		assert.equal(merged.thinking, "high");
-		// Unchanged fields preserved
 		assert.deepEqual(merged.tools, ["read", "grep"]);
 		assert.equal(merged.name, "scout");
 	});
