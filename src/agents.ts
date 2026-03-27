@@ -7,6 +7,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
@@ -67,46 +68,99 @@ export interface InlineConfigOverrides {
 // ---------------------------------------------------------------------------
 
 interface RawFrontmatter {
-	name?: string;
-	description?: string;
-	aliases?: string[] | string;
-	model?: string;
-	thinking?: string;
-	tools?: string;
-	extensions?: string[] | string;
-	no_extensions?: boolean;
-	skills?: string[] | string;
-	no_skills?: boolean;
-	cwd?: string;
-	session_dir?: string;
-	no_session?: boolean;
-	max_turns?: number;
-	can_orchestrate?: boolean;
+	name?: unknown;
+	description?: unknown;
+	aliases?: unknown;
+	model?: unknown;
+	thinking?: unknown;
+	tools?: unknown;
+	extensions?: unknown;
+	no_extensions?: unknown;
+	skills?: unknown;
+	no_skills?: unknown;
+	cwd?: unknown;
+	session_dir?: unknown;
+	no_session?: unknown;
+	max_turns?: unknown;
+	can_orchestrate?: unknown;
 }
 
-function parseCommaSeparated(value: string | string[] | undefined): string[] | undefined {
-	if (!value) return undefined;
-	if (Array.isArray(value)) return value.map((s) => s.trim()).filter(Boolean);
-	return value
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean);
+const INVALID_FRONTMATTER = Symbol("invalid-frontmatter");
+
+type InvalidFrontmatter = typeof INVALID_FRONTMATTER;
+
+type ParsedOptional<T> = T | undefined | InvalidFrontmatter;
+
+function warnInvalidAgentFile(filePath: string, message: string): void {
+	console.warn(`pi-threading: skipping agent file ${filePath}: ${message}`);
 }
 
-function parseAliases(value: string[] | string | undefined): string[] {
-	if (!value) return [];
-	if (Array.isArray(value)) return value.map((s) => s.trim()).filter(Boolean);
-	return value
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean);
+function describeValueType(value: unknown): string {
+	if (Array.isArray(value)) return "array";
+	if (value === null) return "null";
+	return typeof value;
+}
+
+function parseOptionalString(value: unknown, filePath: string, fieldName: string): ParsedOptional<string> {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") {
+		warnInvalidAgentFile(filePath, `${fieldName} must be a string, got ${describeValueType(value)}`);
+		return INVALID_FRONTMATTER;
+	}
+	return value;
+}
+
+function parseOptionalBoolean(value: unknown, filePath: string, fieldName: string): ParsedOptional<boolean> {
+	if (value === undefined) return undefined;
+	if (typeof value !== "boolean") {
+		warnInvalidAgentFile(filePath, `${fieldName} must be a boolean, got ${describeValueType(value)}`);
+		return INVALID_FRONTMATTER;
+	}
+	return value;
+}
+
+function parseOptionalNumber(value: unknown, filePath: string, fieldName: string): ParsedOptional<number> {
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		warnInvalidAgentFile(filePath, `${fieldName} must be a finite number, got ${describeValueType(value)}`);
+		return INVALID_FRONTMATTER;
+	}
+	return value;
+}
+
+function parseOptionalStringList(value: unknown, filePath: string, fieldName: string): ParsedOptional<string[]> {
+	if (value === undefined) return undefined;
+	if (typeof value === "string") {
+		return value
+			.split(",")
+			.map((entry) => entry.trim())
+			.filter(Boolean);
+	}
+	if (Array.isArray(value)) {
+		if (!value.every((entry) => typeof entry === "string")) {
+			warnInvalidAgentFile(filePath, `${fieldName} must contain only strings`);
+			return INVALID_FRONTMATTER;
+		}
+		return value.map((entry) => entry.trim()).filter(Boolean);
+	}
+
+	warnInvalidAgentFile(filePath, `${fieldName} must be a string or string[], got ${describeValueType(value)}`);
+	return INVALID_FRONTMATTER;
+}
+
+function parseAliases(value: unknown, filePath: string): string[] | InvalidFrontmatter {
+	const aliases = parseOptionalStringList(value, filePath, "aliases");
+	if (aliases === INVALID_FRONTMATTER) return INVALID_FRONTMATTER;
+	return aliases ?? [];
 }
 
 function parseAgentFile(filePath: string, source: string): AgentConfig | null {
 	let content: string;
 	try {
 		content = fs.readFileSync(filePath, "utf-8");
-	} catch {
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.warn(`pi-threading: unable to read agent file ${filePath}: ${message}`);
 		return null;
 	}
 
@@ -121,31 +175,67 @@ function parseAgentFile(filePath: string, source: string): AgentConfig | null {
 		return null;
 	}
 
-	if (!frontmatter.name || !frontmatter.description) {
-		console.warn(`pi-threading: skipping agent file missing name/description: ${filePath}`);
+	if (
+		typeof frontmatter.name !== "string" ||
+		frontmatter.name.trim().length === 0 ||
+		typeof frontmatter.description !== "string" ||
+		frontmatter.description.trim().length === 0
+	) {
+		warnInvalidAgentFile(filePath, "name and description must be non-empty strings");
 		return null;
 	}
 
-	const tools = parseCommaSeparated(frontmatter.tools);
-	const extensions = parseCommaSeparated(frontmatter.extensions);
-	const skills = parseCommaSeparated(frontmatter.skills);
+	const name = frontmatter.name;
+	const description = frontmatter.description;
+	const aliases = parseAliases(frontmatter.aliases, filePath);
+	const model = parseOptionalString(frontmatter.model, filePath, "model");
+	const thinking = parseOptionalString(frontmatter.thinking, filePath, "thinking");
+	const tools = parseOptionalStringList(frontmatter.tools, filePath, "tools");
+	const extensions = parseOptionalStringList(frontmatter.extensions, filePath, "extensions");
+	const noExtensions = parseOptionalBoolean(frontmatter.no_extensions, filePath, "no_extensions");
+	const skills = parseOptionalStringList(frontmatter.skills, filePath, "skills");
+	const noSkills = parseOptionalBoolean(frontmatter.no_skills, filePath, "no_skills");
+	const cwd = parseOptionalString(frontmatter.cwd, filePath, "cwd");
+	const sessionDir = parseOptionalString(frontmatter.session_dir, filePath, "session_dir");
+	const noSession = parseOptionalBoolean(frontmatter.no_session, filePath, "no_session");
+	const maxTurns = parseOptionalNumber(frontmatter.max_turns, filePath, "max_turns");
+	const canOrchestrate = parseOptionalBoolean(frontmatter.can_orchestrate, filePath, "can_orchestrate");
+
+	const parsedValues = [
+		aliases,
+		model,
+		thinking,
+		tools,
+		extensions,
+		noExtensions,
+		skills,
+		noSkills,
+		cwd,
+		sessionDir,
+		noSession,
+		maxTurns,
+		canOrchestrate,
+	];
+	if (parsedValues.includes(INVALID_FRONTMATTER)) {
+		return null;
+	}
 
 	return {
-		name: frontmatter.name,
-		description: frontmatter.description,
-		aliases: parseAliases(frontmatter.aliases),
-		model: frontmatter.model || undefined,
-		thinking: frontmatter.thinking || undefined,
+		name,
+		description,
+		aliases,
+		model,
+		thinking,
 		tools: tools && tools.length > 0 ? tools : undefined,
 		extensions: extensions && extensions.length > 0 ? extensions : undefined,
-		noExtensions: frontmatter.no_extensions ?? undefined,
+		noExtensions,
 		skills: skills && skills.length > 0 ? skills : undefined,
-		noSkills: frontmatter.no_skills ?? undefined,
-		cwd: frontmatter.cwd || undefined,
-		sessionDir: frontmatter.session_dir || undefined,
-		noSession: frontmatter.no_session ?? undefined,
-		maxTurns: frontmatter.max_turns ?? undefined,
-		canOrchestrate: frontmatter.can_orchestrate ?? undefined,
+		noSkills,
+		cwd,
+		sessionDir,
+		noSession,
+		maxTurns,
+		canOrchestrate,
 		systemPrompt: body.trim(),
 		source,
 		filePath,
@@ -221,6 +311,11 @@ function findNearestDir(cwd: string, ...segments: string[]): string | null {
 	}
 }
 
+function findNearestProjectDotAgentsDir(cwd: string, userRootDir: string): string | null {
+	const nearestDir = findNearestDir(cwd, ".agents");
+	return nearestDir === userRootDir ? null : nearestDir;
+}
+
 /**
  * Discovers agents from pi-native directories:
  * - User-level: `~/.pi/agent/agents/*.md` (flat)
@@ -254,8 +349,9 @@ export class DotAgentsDiscoverer implements AgentDiscoverer {
 	namespace = "agents";
 
 	discover(cwd: string): AgentConfig[] {
-		const userDir = path.join(process.env.HOME ?? "~", ".agents", "agents");
-		const projectDir = findNearestDir(cwd, ".agents");
+		const userRootDir = path.join(os.homedir(), ".agents");
+		const userDir = path.join(userRootDir, "agents");
+		const projectDir = findNearestProjectDotAgentsDir(cwd, userRootDir);
 
 		const agents = new Map<string, AgentConfig>();
 		for (const a of loadAgentsRecursive(userDir, "agents")) agents.set(a.name, a);
@@ -286,19 +382,21 @@ export function resolveAgent(nameOrRef: string, discoverers: AgentDiscoverer[], 
 	const name = hasNamespace ? nameOrRef.slice(colonIdx + 1) : nameOrRef;
 
 	if (hasNamespace) {
-		const discoverer = discoverers.find((d) => d.namespace === namespace);
-		if (!discoverer) return null;
-		return findByNameOrAlias(name, discoverer.discover(cwd));
+		for (const discoverer of discoverers) {
+			if (discoverer.namespace !== namespace) continue;
+			const match = findByNameOrAlias(name, discoverer.discover(cwd));
+			if (match) return match;
+		}
+		return null;
 	}
 
-	// Bare name: search pi-native (namespace "") first, then others
-	const sorted = [...discoverers].sort((a, b) => {
-		if (a.namespace === "") return -1;
-		if (b.namespace === "") return 1;
-		return 0;
-	});
+	// Bare name: search all pi-native discoverers first, then preserve original order for the rest.
+	const orderedDiscoverers = [
+		...discoverers.filter((discoverer) => discoverer.namespace === ""),
+		...discoverers.filter((discoverer) => discoverer.namespace !== ""),
+	];
 
-	for (const discoverer of sorted) {
+	for (const discoverer of orderedDiscoverers) {
 		const match = findByNameOrAlias(name, discoverer.discover(cwd));
 		if (match) return match;
 	}
