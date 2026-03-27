@@ -420,10 +420,6 @@ class StoreImpl implements Store {
 // ---------------------------------------------------------------------------
 
 /**
- * Open or create a store at the given path.
- * Pass `:memory:` for an ephemeral in-memory database (useful for tests).
- */
-/**
  * Open (or create) a tree-state SQLite database at `dbPath`.
  *
  * Runs schema migrations on first open. Uses WAL mode, foreign keys,

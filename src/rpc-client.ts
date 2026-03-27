@@ -344,7 +344,7 @@ export class RpcClient extends EventEmitter {
 		return data.messages;
 	}
 
-	respondToUiRequest(id: string, response: Omit<RpcExtensionUIResponse, "type" | "id">): void {
+	respondToUiRequest(id: string, response: { value: string } | { confirmed: boolean } | { cancelled: true }): void {
 		this.send({ type: "extension_ui_response", id, ...response });
 	}
 
@@ -368,7 +368,12 @@ export class RpcClient extends EventEmitter {
 
 		this.tempPromptDir = mkdtempSync(path.join(os.tmpdir(), "pi-threading-rpc-"));
 		this.tempPromptPath = path.join(this.tempPromptDir, "system-prompt.md");
-		writeFileSync(this.tempPromptPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
+		try {
+			writeFileSync(this.tempPromptPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
+		} catch (error) {
+			this.cleanupTempPrompt();
+			throw error;
+		}
 		return this.tempPromptPath;
 	}
 
@@ -503,7 +508,10 @@ export class RpcClient extends EventEmitter {
 }
 
 function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		timer.unref();
+	});
 }
 
 /** Read a system prompt file from disk. Utility for tests. */
