@@ -196,6 +196,8 @@ function parseAgentFile(filePath: string, source: string): AgentConfig | null {
 	const maxTurns = parseOptionalNumber(frontmatter.max_turns, filePath, "max_turns");
 	const canOrchestrate = parseOptionalBoolean(frontmatter.can_orchestrate, filePath, "can_orchestrate");
 
+	// If any field failed validation, the file is skipped.
+	// The helper narrows away InvalidFrontmatter so the return type is clean.
 	function valid<T>(value: ParsedOptional<T>): value is T | undefined {
 		return value !== INVALID_FRONTMATTER;
 	}
