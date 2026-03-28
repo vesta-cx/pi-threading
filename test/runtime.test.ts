@@ -21,8 +21,10 @@ class FakeRpcClient extends EventEmitter {
 	stderr = "";
 	autoExitOnKill = true;
 	messages: unknown[] = [];
+	throwOnPrompt = false;
 
 	prompt(message: string): void {
+		if (this.throwOnPrompt) throw new Error("prompt failed");
 		this.prompts.push(message);
 	}
 
@@ -151,6 +153,37 @@ describe("ThreadRuntime", () => {
 
 		root.steer("Keep going");
 		assert.deepEqual(clients[0].steers, ["Keep going"]);
+	});
+
+	it("rejects unsafe path segments in generated session paths", () => {
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => new FakeRpcClient(),
+		});
+
+		assert.throws(() => runtime.spawn(createAgentConfig(), "Do work", { id: "../escape" }), /Invalid agent id/);
+	});
+
+	it("rolls back the spawn when prompt delivery fails", () => {
+		const client = new FakeRpcClient();
+		client.throwOnPrompt = true;
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		assert.throws(() => runtime.spawn(createAgentConfig(), "Do work"), /prompt failed/);
+		assert.deepEqual(runtime.getTree().children, []);
+		assert.equal((runtime as any).trunkId, null);
+		assert.deepEqual(client.killTimeouts, [1]);
 	});
 
 	it("aggregates usage from message_end and emits agent:activity for tool and message events", () => {
@@ -398,6 +431,52 @@ describe("ThreadRuntime", () => {
 			/max_tree_agents exceeded/,
 		);
 		countRuntimeStore.close();
+	});
+
+	it("rejects parent ids that are missing from the current trunk", () => {
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 10,
+			maxTreeDepth: 10,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => new FakeRpcClient(),
+		});
+
+		runtime.spawn(createAgentConfig(), "Root job");
+		assert.throws(
+			() => runtime.spawn(createAgentConfig({ name: "orphan" }), "Child job", { parentId: "missing-parent" }),
+			/parent not found in trunk/,
+		);
+	});
+
+	it("does not count terminal agents toward concurrency limits", () => {
+		const clients: FakeRpcClient[] = [];
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 1,
+			maxTreeDepth: 10,
+			maxTreeAgents: 1,
+			rpcClientFactory: () => {
+				const client = new FakeRpcClient();
+				clients.push(client);
+				return client;
+			},
+		});
+
+		const first = runtime.spawn(createAgentConfig({ name: "first" }), "First job");
+		clients[0]?.emit("tool_execution_end", {
+			type: "tool_execution_end",
+			toolCallId: "finish-1",
+			toolName: "finish_task",
+			result: { summary: "done" },
+			isError: false,
+		});
+		clients[0]?.emit("exit", 0, null);
+		assert.equal(store.getAgent(first.id)?.status, "exited");
+
+		assert.doesNotThrow(() => runtime.spawn(createAgentConfig({ name: "second" }), "Second job"));
 	});
 
 	it("keeps an existing empty trunk when client construction fails", () => {

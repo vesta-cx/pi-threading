@@ -151,10 +151,12 @@ interface ActiveAgentState {
  * session root.
  */
 export function generateSessionPath(trunkId: string, agentId: string, sessionRootDir?: string): string {
+	const safeTrunkId = assertSafeSessionPathSegment(trunkId, "trunk id");
+	const safeAgentId = assertSafeSessionPathSegment(agentId, "agent id");
 	const root = sessionRootDir ?? path.join(os.homedir(), ".pi", "agent", "sessions", "pi-threading");
-	const dir = path.join(root, trunkId);
+	const dir = path.join(root, safeTrunkId);
 	mkdirSync(dir, { recursive: true });
-	return path.join(dir, `${agentId}.jsonl`);
+	return path.join(dir, `${safeAgentId}.jsonl`);
 }
 
 /**
@@ -245,7 +247,7 @@ export class ThreadRuntime extends EventEmitter {
 		} catch (error) {
 			this.activeAgents.delete(agentId);
 			void client.kill(1).catch(() => {});
-			this.store.updateAgentStatus(agentId, "crashed");
+			this.rollbackSpawn(agentId, createdTrunkThisCall);
 			throw error;
 		}
 
@@ -393,8 +395,17 @@ export class ThreadRuntime extends EventEmitter {
 
 	private assertWithinLimits(parentId: string | null): void {
 		if (!this.trunkId) return;
+
+		if (parentId) {
+			const parent = this.store.getAgent(parentId);
+			if (!parent || parent.trunkId !== this.trunkId) {
+				throw new Error(`Cannot spawn agent: parent not found in trunk (${parentId})`);
+			}
+		}
+
 		const allAgents = this.store.getAgentsInTrunk(this.trunkId);
-		const siblingCount = allAgents.filter((agent) => agent.parentAgentId === parentId).length;
+		const liveAgents = allAgents.filter((agent) => !isTerminalAgentStatus(agent.status));
+		const siblingCount = liveAgents.filter((agent) => agent.parentAgentId === parentId).length;
 		if (siblingCount >= this.settings.maxChildren) {
 			throw new Error(`Cannot spawn agent: max_children exceeded (${this.settings.maxChildren})`);
 		}
@@ -404,7 +415,7 @@ export class ThreadRuntime extends EventEmitter {
 			throw new Error(`Cannot spawn agent: max_tree_depth exceeded (${this.settings.maxTreeDepth})`);
 		}
 
-		if (allAgents.length >= this.settings.maxTreeAgents) {
+		if (liveAgents.length >= this.settings.maxTreeAgents) {
 			throw new Error(`Cannot spawn agent: max_tree_agents exceeded (${this.settings.maxTreeAgents})`);
 		}
 	}
@@ -555,6 +566,21 @@ function serializeAgentConfig(config: AgentConfig): Record<string, unknown> {
 		source: config.source,
 		filePath: config.filePath,
 	};
+}
+
+function assertSafeSessionPathSegment(value: string, label: string): string {
+	if (!value || value === "." || value === "..") {
+		throw new Error(`Invalid ${label}: ${value}`);
+	}
+	if (
+		path.isAbsolute(value) ||
+		value.includes(path.sep) ||
+		value.includes(path.posix.sep) ||
+		value.includes(path.win32.sep)
+	) {
+		throw new Error(`Invalid ${label}: ${value}`);
+	}
+	return value;
 }
 
 function emptyUsage(): AgentUsage {
