@@ -18,20 +18,24 @@ interface BootstrapError {
 	recovery: string;
 }
 
+/**
+ * Result of attempting to load better-sqlite3.
+ * Check `available` before using the database — if `false`, `error` describes
+ * the failure and a suggested recovery command.
+ */
 export type BootstrapResult = { available: true; error: null } | { available: false; error: BootstrapError };
 
-let _result: BootstrapResult | null = null;
-let _lastError: unknown = null;
+type TryResult = { ok: true } | { ok: false; error: unknown };
+
+let _cached: BootstrapResult | null = null;
 
 function getPackageDir(): string {
 	const thisFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
-	// src/bootstrap.ts -> package root
 	return resolve(dirname(thisFile), "..");
 }
 
-function createBootstrapError(error: unknown): BootstrapError {
+function formatError(error: unknown): BootstrapError {
 	const detail = error instanceof Error ? error.message : String(error ?? "unknown error");
-
 	return {
 		summary: "Failed to load better-sqlite3.",
 		detail: `Reason: ${detail}`,
@@ -39,17 +43,16 @@ function createBootstrapError(error: unknown): BootstrapError {
 	};
 }
 
-function tryRequire(): boolean {
+function tryRequire(): TryResult {
 	try {
 		require("better-sqlite3");
-		return true;
+		return { ok: true };
 	} catch (err) {
-		_lastError = err;
-		return false;
+		return { ok: false, error: err };
 	}
 }
 
-function tryRebuild(): boolean {
+function tryRebuild(): TryResult {
 	try {
 		const pkgDir = getPackageDir();
 		const rebuild = spawnSync("npm", ["rebuild", "better-sqlite3"], {
@@ -59,44 +62,39 @@ function tryRebuild(): boolean {
 			shell: process.platform === "win32",
 		});
 
-		if (rebuild.error) {
-			_lastError = rebuild.error;
-			return false;
-		}
-
-		if (rebuild.signal) {
-			_lastError = new Error(`npm rebuild better-sqlite3 was terminated by signal ${rebuild.signal}`);
-			return false;
-		}
-
-		if (rebuild.status !== 0) {
-			_lastError = new Error(`npm rebuild better-sqlite3 exited with code ${rebuild.status ?? "unknown"}`);
-			return false;
-		}
+		if (rebuild.error) return { ok: false, error: rebuild.error };
+		if (rebuild.signal) return { ok: false, error: new Error(`npm rebuild terminated by signal ${rebuild.signal}`) };
+		if (rebuild.status !== 0)
+			return { ok: false, error: new Error(`npm rebuild exited with code ${rebuild.status ?? "unknown"}`) };
 
 		return tryRequire();
 	} catch (err) {
-		_lastError = err;
-		return false;
+		return { ok: false, error: err };
 	}
 }
 
+/**
+ * Load better-sqlite3, rebuilding the native addon if necessary.
+ *
+ * Results are cached — subsequent calls return the same outcome without
+ * re-attempting the load or rebuild. Safe to call from multiple entry
+ * points in the same process.
+ */
 export function bootstrapSqlite(): BootstrapResult {
-	if (_result) {
-		return _result;
+	if (_cached) return _cached;
+
+	const load = tryRequire();
+	if (load.ok) {
+		_cached = { available: true, error: null };
+		return _cached;
 	}
 
-	if (tryRequire()) {
-		_result = { available: true, error: null };
-		return _result;
+	const rebuild = tryRebuild();
+	if (rebuild.ok) {
+		_cached = { available: true, error: null };
+		return _cached;
 	}
 
-	// Prebuilt binary didn't match — attempt rebuild
-	if (tryRebuild()) {
-		_result = { available: true, error: null };
-		return _result;
-	}
-
-	_result = { available: false, error: createBootstrapError(_lastError) };
-	return _result;
+	_cached = { available: false, error: formatError(rebuild.error) };
+	return _cached;
 }

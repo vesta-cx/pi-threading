@@ -9,13 +9,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { type AgentUsage, createStore, type Store } from "../src/store.js";
 
 let store: Store;
 
 beforeEach(() => {
 	store = createStore(":memory:");
+});
+
+afterEach(() => {
+	store.close();
 });
 
 /** Assert a value is non-null and return it typed. */

@@ -15,6 +15,7 @@ import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 // Types
 // ---------------------------------------------------------------------------
 
+/** Fully parsed agent definition loaded from a markdown file's YAML frontmatter. */
 export interface AgentConfig {
 	name: string;
 	description: string;
@@ -36,17 +37,7 @@ export interface AgentConfig {
 	filePath: string;
 }
 
-/**
- * Pluggable agent discovery interface.
- * Ship two built-in discoverers; the interface is public API for future extensions.
- */
-export interface AgentDiscoverer {
-	/** Namespace prefix: "" for pi-native, "agents" for .agents/, etc. */
-	namespace: string;
-	/** Scan directories and return all valid agent configs found. */
-	discover(cwd: string): AgentConfig[];
-}
-
+/** Fields that can be overridden at spawn time without modifying the on-disk agent definition. */
 export interface InlineConfigOverrides {
 	model?: string;
 	thinking?: string;
@@ -205,22 +196,27 @@ function parseAgentFile(filePath: string, source: string): AgentConfig | null {
 	const maxTurns = parseOptionalNumber(frontmatter.max_turns, filePath, "max_turns");
 	const canOrchestrate = parseOptionalBoolean(frontmatter.can_orchestrate, filePath, "can_orchestrate");
 
-	const parsedValues = [
-		aliases,
-		model,
-		thinking,
-		tools,
-		extensions,
-		noExtensions,
-		skills,
-		noSkills,
-		cwd,
-		sessionDir,
-		noSession,
-		maxTurns,
-		canOrchestrate,
-	];
-	if (parsedValues.includes(INVALID_FRONTMATTER)) {
+	// If any field failed validation, the file is skipped.
+	// The helper narrows away InvalidFrontmatter so the return type is clean.
+	function valid<T>(value: ParsedOptional<T>): value is T | undefined {
+		return value !== INVALID_FRONTMATTER;
+	}
+
+	if (
+		!valid(aliases) ||
+		!valid(model) ||
+		!valid(thinking) ||
+		!valid(tools) ||
+		!valid(extensions) ||
+		!valid(noExtensions) ||
+		!valid(skills) ||
+		!valid(noSkills) ||
+		!valid(cwd) ||
+		!valid(sessionDir) ||
+		!valid(noSession) ||
+		!valid(maxTurns) ||
+		!valid(canOrchestrate)
+	) {
 		return null;
 	}
 
@@ -250,32 +246,11 @@ function parseAgentFile(filePath: string, source: string): AgentConfig | null {
 // Directory scanning
 // ---------------------------------------------------------------------------
 
-function loadAgentsFromDir(dir: string, source: string): AgentConfig[] {
-	if (!fs.existsSync(dir)) return [];
-
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-
-	const agents: AgentConfig[] = [];
-	for (const entry of entries) {
-		if (!entry.name.endsWith(".md")) continue;
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-
-		const config = parseAgentFile(path.join(dir, entry.name), source);
-		if (config) agents.push(config);
-	}
-	return agents;
-}
-
-function loadAgentsRecursive(dir: string, source: string): AgentConfig[] {
+function scanDir(dir: string, source: string, recursive: boolean): AgentConfig[] {
 	if (!fs.existsSync(dir)) return [];
 
 	const agents: AgentConfig[] = [];
-	const walk = (current: string) => {
+	const visit = (current: string) => {
 		let entries: fs.Dirent[];
 		try {
 			entries = fs.readdirSync(current, { withFileTypes: true });
@@ -284,21 +259,18 @@ function loadAgentsRecursive(dir: string, source: string): AgentConfig[] {
 		}
 		for (const entry of entries) {
 			const full = path.join(current, entry.name);
-			if (entry.isDirectory()) {
-				walk(full);
+			// Directory symlinks return false for isDirectory(), intentionally not followed (prevents cycles)
+			if (recursive && entry.isDirectory()) {
+				visit(full);
 			} else if (entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink())) {
 				const config = parseAgentFile(full, source);
 				if (config) agents.push(config);
 			}
 		}
 	};
-	walk(dir);
+	visit(dir);
 	return agents;
 }
-
-// ---------------------------------------------------------------------------
-// Discoverers
-// ---------------------------------------------------------------------------
 
 function findNearestDir(cwd: string, ...segments: string[]): string | null {
 	let current = cwd;
@@ -315,67 +287,56 @@ function findNearestDir(cwd: string, ...segments: string[]): string | null {
 	}
 }
 
-function findNearestProjectDotAgentsDir(cwd: string, userRootDir: string): string | null {
-	const nearestDir = findNearestDir(cwd, ".agents");
-	return nearestDir === userRootDir ? null : nearestDir;
+// ---------------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------------
+
+/** Options for overriding default discovery paths (primarily for testing). */
+export interface DiscoverOptions {
+	piUserDir?: string;
+	dotAgentsUserRootDir?: string;
 }
 
 /**
- * Discovers agents from pi-native directories:
- * - User-level: `~/.pi/agent/agents/*.md` (flat)
- * - Project-local: `.pi/agents/*.md` (flat, nearest ancestor)
- */
-export interface PiAgentDiscovererOptions {
-	userDir?: string;
-}
-
-export class PiAgentDiscoverer implements AgentDiscoverer {
-	namespace = "";
-
-	constructor(private readonly options: PiAgentDiscovererOptions = {}) {}
-
-	discover(cwd: string): AgentConfig[] {
-		const userDir = this.options.userDir ?? path.join(getAgentDir(), "agents");
-		const projectDir = findNearestDir(cwd, ".pi", "agents");
-
-		// User agents first, project agents override by name
-		const agents = new Map<string, AgentConfig>();
-		for (const a of loadAgentsFromDir(userDir, "pi")) agents.set(a.name, a);
-		if (projectDir) {
-			for (const a of loadAgentsFromDir(projectDir, "pi")) agents.set(a.name, a);
-		}
-		return Array.from(agents.values());
-	}
-}
-
-/**
- * Discovers agents from .agents/ directories:
- * - User-level: `~/.agents/agents/**\/*.md` (recursive)
- * - Project-local: `.agents/**\/*.md` (recursive, nearest ancestor)
+ * Discover all agent definitions from the four standard directories.
  *
- * Namespaced as `agents:`.
+ * Scans in order (later entries override earlier by name):
+ * 1. `~/.pi/agent/agents/*.md` — pi user-level (flat)
+ * 2. Nearest `.pi/agents/*.md` — pi project-local (flat)
+ * 3. `~/.agents/agents/**\/*.md` — .agents user-level (recursive)
+ * 4. Nearest `.agents/**\/*.md` — .agents project-local (recursive)
+ *
+ * Each agent carries a `source` field (`"pi"` or `"agents"`) indicating
+ * where it was loaded from.
  */
-export interface DotAgentsDiscovererOptions {
-	userRootDir?: string;
-}
+export function discoverAgents(cwd: string, options?: DiscoverOptions): AgentConfig[] {
+	const piUserDir = options?.piUserDir ?? path.join(getAgentDir(), "agents");
+	const dotAgentsRoot = options?.dotAgentsUserRootDir ?? path.join(os.homedir(), ".agents");
+	const dotAgentsUserDir = path.join(dotAgentsRoot, "agents");
 
-export class DotAgentsDiscoverer implements AgentDiscoverer {
-	namespace = "agents";
+	// Key by source:name so agents from different sources don't overwrite each other.
+	// Within the same source, project-local overrides user-level (scanned second).
+	const agents = new Map<string, AgentConfig>();
 
-	constructor(private readonly options: DotAgentsDiscovererOptions = {}) {}
+	// 1. pi user-level (flat)
+	for (const a of scanDir(piUserDir, "pi", false)) agents.set(`pi:${a.name}`, a);
 
-	discover(cwd: string): AgentConfig[] {
-		const userRootDir = this.options.userRootDir ?? path.join(os.homedir(), ".agents");
-		const userDir = path.join(userRootDir, "agents");
-		const projectDir = findNearestProjectDotAgentsDir(cwd, userRootDir);
-
-		const agents = new Map<string, AgentConfig>();
-		for (const a of loadAgentsRecursive(userDir, "agents")) agents.set(a.name, a);
-		if (projectDir) {
-			for (const a of loadAgentsRecursive(projectDir, "agents")) agents.set(a.name, a);
-		}
-		return Array.from(agents.values());
+	// 2. pi project-local (flat) — overrides pi user-level
+	const piProjectDir = findNearestDir(cwd, ".pi", "agents");
+	if (piProjectDir) {
+		for (const a of scanDir(piProjectDir, "pi", false)) agents.set(`pi:${a.name}`, a);
 	}
+
+	// 3. .agents user-level (recursive)
+	for (const a of scanDir(dotAgentsUserDir, "agents", true)) agents.set(`agents:${a.name}`, a);
+
+	// 4. .agents project-local (recursive) — overrides .agents user-level, excluding user root
+	const dotAgentsProjectDir = findNearestDir(cwd, ".agents");
+	if (dotAgentsProjectDir && dotAgentsProjectDir !== dotAgentsRoot) {
+		for (const a of scanDir(dotAgentsProjectDir, "agents", true)) agents.set(`agents:${a.name}`, a);
+	}
+
+	return Array.from(agents.values());
 }
 
 // ---------------------------------------------------------------------------
@@ -383,53 +344,40 @@ export class DotAgentsDiscoverer implements AgentDiscoverer {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve an agent by name or `namespace:name`.
+ * Resolve an agent by name, alias, or `namespace:name` reference.
  *
- * Resolution order:
- * 1. If namespaced (`agents:scout`), search only that discoverer by name then alias.
- * 2. If bare (`scout`), search pi-native first, then other discoverers, by name then alias.
+ * - Bare names (`scout`) search pi-source agents first, then .agents-source.
+ * - Namespaced names (`agents:scout`) search only that source.
+ * - Alias resolution is checked after name miss, scoped per source.
  *
- * Returns null if no agent matches.
+ * @returns The first matching `AgentConfig`, or `null` if no agent matches.
  */
-export function resolveAgent(nameOrRef: string, discoverers: AgentDiscoverer[], cwd: string): AgentConfig | null {
+export function resolveAgent(nameOrRef: string, cwd: string, options?: DiscoverOptions): AgentConfig | null {
 	const colonIdx = nameOrRef.indexOf(":");
 	const hasNamespace = colonIdx > 0;
 	const namespace = hasNamespace ? nameOrRef.slice(0, colonIdx) : "";
 	const name = hasNamespace ? nameOrRef.slice(colonIdx + 1) : nameOrRef;
 
+	const all = discoverAgents(cwd, options);
+
 	if (hasNamespace) {
-		for (const discoverer of discoverers) {
-			if (discoverer.namespace !== namespace) continue;
-			const match = findByNameOrAlias(name, discoverer.discover(cwd));
-			if (match) return match;
-		}
-		return null;
+		const scoped = all.filter((a) => a.source === namespace);
+		return findByNameOrAlias(name, scoped);
 	}
 
-	// Bare name: search all pi-native discoverers first, then preserve original order for the rest.
-	const orderedDiscoverers = [
-		...discoverers.filter((discoverer) => discoverer.namespace === ""),
-		...discoverers.filter((discoverer) => discoverer.namespace !== ""),
-	];
+	// Bare name: search pi-source first, then others
+	const piAgents = all.filter((a) => a.source === "pi");
+	const otherAgents = all.filter((a) => a.source !== "pi");
 
-	for (const discoverer of orderedDiscoverers) {
-		const match = findByNameOrAlias(name, discoverer.discover(cwd));
-		if (match) return match;
-	}
-
-	return null;
+	return findByNameOrAlias(name, piAgents) ?? findByNameOrAlias(name, otherAgents);
 }
 
 function findByNameOrAlias(name: string, agents: AgentConfig[]): AgentConfig | null {
-	// Exact name match first
 	const byName = agents.find((a) => a.name === name);
 	if (byName) return byName;
 
-	// Then alias match
 	const byAlias = agents.find((a) => a.aliases.includes(name));
-	if (byAlias) return byAlias;
-
-	return null;
+	return byAlias ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -437,9 +385,12 @@ function findByNameOrAlias(name: string, agents: AgentConfig[]): AgentConfig | n
 // ---------------------------------------------------------------------------
 
 /**
- * Merge a disk-loaded config with inline overrides.
- * Inline values replace disk values; `undefined` inline values are skipped.
- * `systemPrompt` from inline replaces entirely (not appended).
+ * Merge inline spawn-time overrides onto a disk-loaded agent config.
+ *
+ * `undefined` override values are skipped (disk value preserved).
+ * `systemPrompt` from overrides replaces the disk value entirely — it is
+ * not appended. Identity fields (`name`, `description`, `aliases`, `source`,
+ * `filePath`) always come from the disk config.
  */
 export function mergeConfigs(disk: AgentConfig, overrides: InlineConfigOverrides): AgentConfig {
 	return {
@@ -458,13 +409,4 @@ export function mergeConfigs(disk: AgentConfig, overrides: InlineConfigOverrides
 		canOrchestrate: overrides.canOrchestrate ?? disk.canOrchestrate,
 		systemPrompt: overrides.systemPrompt ?? disk.systemPrompt,
 	};
-}
-
-// ---------------------------------------------------------------------------
-// Default discoverers
-// ---------------------------------------------------------------------------
-
-/** Create the standard set of discoverers (pi-native + .agents/). */
-export function createDefaultDiscoverers(): AgentDiscoverer[] {
-	return [new PiAgentDiscoverer(), new DotAgentsDiscoverer()];
 }
