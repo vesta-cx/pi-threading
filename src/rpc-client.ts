@@ -107,11 +107,14 @@ export type RpcExtensionUIRequest =
 			text: string;
 	  });
 
+/** Payload used to answer an `extension_ui_request`. */
+export type RpcExtensionUIResponsePayload = { value: string } | { confirmed: boolean } | { cancelled: true };
+
 /** Response sent to the child process to answer an `extension_ui_request`. */
-export type RpcExtensionUIResponse =
-	| { type: "extension_ui_response"; id: string; value: string }
-	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; cancelled: true };
+export type RpcExtensionUIResponse = {
+	type: "extension_ui_response";
+	id: string;
+} & RpcExtensionUIResponsePayload;
 
 /** Error event emitted when an extension in the child process throws. */
 export interface RpcExtensionError {
@@ -253,7 +256,6 @@ export function buildRpcArgs(config: AgentConfig, sessionPath: string, systemPro
  * and result synthesis belong in `runtime.ts`.
  */
 export class RpcClient extends EventEmitter {
-	private readonly spawnImpl: typeof spawn;
 	private readonly child: SpawnedProcess;
 	private readonly pendingRequests = new Map<string, PendingRequest>();
 	private readonly exitPromise: Promise<void>;
@@ -278,7 +280,7 @@ export class RpcClient extends EventEmitter {
 
 	constructor(options: RpcClientOptions) {
 		super();
-		this.spawnImpl = options.spawnImpl ?? spawn;
+		const spawnImpl = options.spawnImpl ?? spawn;
 		this.exitPromise = new Promise<void>((resolve) => {
 			this.resolveExit = resolve;
 		});
@@ -295,7 +297,7 @@ export class RpcClient extends EventEmitter {
 		};
 
 		try {
-			this.child = this.spawnImpl(invocation.command, invocation.args, spawnOptions) as SpawnedProcess;
+			this.child = spawnImpl(invocation.command, invocation.args, spawnOptions) as SpawnedProcess;
 		} catch (error) {
 			this.cleanupTempPrompt();
 			throw error;
@@ -344,8 +346,9 @@ export class RpcClient extends EventEmitter {
 		return data.messages;
 	}
 
-	respondToUiRequest(id: string, response: { value: string } | { confirmed: boolean } | { cancelled: true }): void {
-		this.send({ type: "extension_ui_response", id, ...response });
+	respondToUiRequest(id: string, response: RpcExtensionUIResponsePayload): void {
+		const message: RpcExtensionUIResponse = { type: "extension_ui_response", id, ...response };
+		this.send(message);
 	}
 
 	async kill(timeout = 1000): Promise<void> {
