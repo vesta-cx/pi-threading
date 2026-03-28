@@ -109,8 +109,8 @@ export interface Store {
 	updateAgentStatus(id: string, status: AgentStatus): void;
 	/** Replace an agent's cumulative usage record. */
 	updateAgentUsage(id: string, usage: AgentUsage): void;
-	/** Delete a single agent row. Used to roll back failed spawns. */
-	deleteAgent(id: string): void;
+	/** Atomically roll back a failed spawn and optionally clear a newly-created empty trunk. */
+	rollbackSpawn(agentId: string, trunkId: string, clearTrunkWhenEmpty: boolean): boolean;
 
 	/** Return all agents in a trunk ordered by spawn time. */
 	getAgentsInTrunk(trunkId: string): Agent[];
@@ -349,8 +349,21 @@ class StoreImpl implements Store {
 		this.db.prepare("UPDATE agents SET usage_json = ? WHERE id = ?").run(JSON.stringify(usage), id);
 	}
 
-	deleteAgent(id: string): void {
-		this.db.prepare("DELETE FROM agents WHERE id = ?").run(id);
+	rollbackSpawn(agentId: string, trunkId: string, clearTrunkWhenEmpty: boolean): boolean {
+		let trunkCleared = false;
+		this.db.transaction(() => {
+			this.db.prepare("DELETE FROM agents WHERE id = ?").run(agentId);
+			if (!clearTrunkWhenEmpty) return;
+
+			const row = this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE trunk_id = ?").get(trunkId) as {
+				count: number;
+			};
+			if (row.count === 0) {
+				this.db.prepare("DELETE FROM trunks WHERE id = ?").run(trunkId);
+				trunkCleared = true;
+			}
+		})();
+		return trunkCleared;
 	}
 
 	// -- Tree traversal ------------------------------------------------------

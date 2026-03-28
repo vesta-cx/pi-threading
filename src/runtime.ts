@@ -190,8 +190,9 @@ export class ThreadRuntime extends EventEmitter {
 	/** Spawn a child agent and return a lightweight handle immediately. */
 	spawn(configOrRef: AgentConfig | string, task: string, options: SpawnOptions = {}): AgentHandle {
 		const config = this.resolveSpawnConfig(configOrRef);
+		const hadTrunkBefore = this.trunkId !== null;
 		const trunk = this.ensureTrunk();
-		const createdTrunkThisCall = this.trunkId === trunk.id && this.store.getAgentsInTrunk(trunk.id).length === 0;
+		const createdTrunkThisCall = !hadTrunkBefore;
 		this.assertWithinLimits(options.parentId ?? null);
 
 		const agentId = options.id ?? crypto.randomUUID();
@@ -383,10 +384,9 @@ export class ThreadRuntime extends EventEmitter {
 	}
 
 	private rollbackSpawn(agentId: string, createdTrunkThisCall: boolean): void {
-		this.store.deleteAgent(agentId);
 		if (!this.trunkId) return;
-		if (createdTrunkThisCall && this.store.getAgentsInTrunk(this.trunkId).length === 0) {
-			this.store.clearTrunk(this.trunkId);
+		const trunkCleared = this.store.rollbackSpawn(agentId, this.trunkId, createdTrunkThisCall);
+		if (trunkCleared) {
 			this.trunkId = null;
 		}
 	}
@@ -581,6 +581,10 @@ function addUsage(left: AgentUsage, right: AgentUsage): AgentUsage {
 	};
 }
 
+function readFiniteNumber(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function extractUsageDelta(message: Message): AgentUsage | null {
 	if (!message || typeof message !== "object" || !("role" in message) || message.role !== "assistant") {
 		return null;
@@ -589,22 +593,36 @@ function extractUsageDelta(message: Message): AgentUsage | null {
 		return null;
 	}
 
-	const usage = message.usage as {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-		totalTokens: number;
-		cost: { total: number };
-	};
+	const usage = message.usage as Record<string, unknown>;
+	const cost = usage.cost;
+	if (!cost || typeof cost !== "object") {
+		return null;
+	}
+
+	const input = readFiniteNumber(usage.input);
+	const output = readFiniteNumber(usage.output);
+	const cacheRead = readFiniteNumber(usage.cacheRead);
+	const cacheWrite = readFiniteNumber(usage.cacheWrite);
+	const totalTokens = readFiniteNumber(usage.totalTokens);
+	const totalCost = readFiniteNumber((cost as Record<string, unknown>).total);
+	if (
+		input === null ||
+		output === null ||
+		cacheRead === null ||
+		cacheWrite === null ||
+		totalTokens === null ||
+		totalCost === null
+	) {
+		return null;
+	}
 
 	return {
-		input: usage.input,
-		output: usage.output,
-		cacheRead: usage.cacheRead,
-		cacheWrite: usage.cacheWrite,
-		cost: usage.cost.total,
-		contextTokens: usage.totalTokens,
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		cost: totalCost,
+		contextTokens: totalTokens,
 		turns: 1,
 	};
 }
@@ -690,11 +708,6 @@ function parseConfirmation(answer: string): boolean {
 }
 
 function synthesizeCrashResult(active: ActiveAgentState): FinishTaskResult {
-	const assistantSummary = active.lastAssistantMessage ? summarizeMessage(active.lastAssistantMessage) : null;
-	if (assistantSummary) {
-		return { summary: assistantSummary, source: "crash_fallback" };
-	}
-
 	if (active.lastActivity?.kind === "tool_execution_start") {
 		return {
 			summary: `Agent crashed while running tool ${active.lastActivity.toolName}.`,
@@ -711,6 +724,11 @@ function synthesizeCrashResult(active: ActiveAgentState): FinishTaskResult {
 
 	if (active.lastActivity?.kind === "message_end") {
 		return { summary: active.lastActivity.summary, source: "crash_fallback" };
+	}
+
+	const assistantSummary = active.lastAssistantMessage ? summarizeMessage(active.lastAssistantMessage) : null;
+	if (assistantSummary) {
+		return { summary: assistantSummary, source: "crash_fallback" };
 	}
 
 	const stderr = active.client.getStderr().trim();

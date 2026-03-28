@@ -194,6 +194,36 @@ describe("ThreadRuntime", () => {
 		assert.equal(runtime.getTreeCost(), 0.25);
 	});
 
+	it("ignores malformed assistant usage payloads instead of throwing", () => {
+		const client = new FakeRpcClient();
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Do work");
+		assert.doesNotThrow(() => {
+			client.emit("message_end", {
+				type: "message_end",
+				message: {
+					...assistantMessage("Still working"),
+					usage: {
+						input: 10,
+						output: 5,
+						cacheRead: 2,
+						cacheWrite: 1,
+						totalTokens: 18,
+					},
+				},
+			});
+		});
+		assert.equal(store.getAgent(handle.id)?.usage, null);
+	});
+
 	it("stores pending questions and answers them through the active client", () => {
 		const client = new FakeRpcClient();
 		const questions: PendingQuestion[] = [];
@@ -289,6 +319,33 @@ describe("ThreadRuntime", () => {
 		assert.deepEqual(crashes, ["Last known status: indexing src/ directory."]);
 	});
 
+	it("prefers the latest tool activity over stale assistant text in crash summaries", () => {
+		const client = new FakeRpcClient();
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Try your best");
+		client.emit("message_end", {
+			type: "message_end",
+			message: assistantMessage("Planning next step."),
+		});
+		client.emit("tool_execution_start", {
+			type: "tool_execution_start",
+			toolCallId: "tool-1",
+			toolName: "bash",
+			args: { command: "npm test" },
+		});
+		client.emit("exit", 1, "SIGTERM");
+
+		assert.equal(runtime.getResult(handle.id)?.summary, "Agent crashed while running tool bash.");
+	});
+
 	it("enforces max_children, max_tree_depth, and max_tree_agents", () => {
 		const clients: FakeRpcClient[] = [];
 		const runtime = new ThreadRuntime(store, {
@@ -310,7 +367,8 @@ describe("ThreadRuntime", () => {
 			/max_children exceeded/,
 		);
 
-		const childRuntime = new ThreadRuntime(createStore(":memory:"), {
+		const depthRuntimeStore = createStore(":memory:");
+		const childRuntime = new ThreadRuntime(depthRuntimeStore, {
 			dbPath: "/tmp/threading.db",
 			sessionRootDir,
 			maxChildren: 3,
@@ -323,6 +381,7 @@ describe("ThreadRuntime", () => {
 			() => childRuntime.spawn(createAgentConfig({ name: "too-deep" }), "depth child", { parentId: depthRoot.id }),
 			/max_tree_depth exceeded/,
 		);
+		depthRuntimeStore.close();
 
 		const countRuntimeStore = createStore(":memory:");
 		const countRuntime = new ThreadRuntime(countRuntimeStore, {
@@ -339,6 +398,25 @@ describe("ThreadRuntime", () => {
 			/max_tree_agents exceeded/,
 		);
 		countRuntimeStore.close();
+	});
+
+	it("keeps an existing empty trunk when client construction fails", () => {
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 10,
+			maxTreeDepth: 10,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => {
+				throw new Error("spawn failed");
+			},
+		});
+		const trunk = store.createTrunk({ id: "existing-trunk" });
+		(runtime as any).trunkId = trunk.id;
+
+		assert.throws(() => runtime.spawn(createAgentConfig(), "Will fail"), /spawn failed/);
+		assert.ok(store.getTrunk(trunk.id));
+		assert.deepEqual(store.getAgentsInTrunk(trunk.id), []);
 	});
 
 	it("shutdown() kills active agents and marks the trunk completed", async () => {
