@@ -352,7 +352,7 @@ class StoreImpl implements Store {
 	rollbackSpawn(agentId: string, trunkId: string, clearTrunkWhenEmpty: boolean): boolean {
 		let trunkCleared = false;
 		this.db.transaction(() => {
-			this.db.prepare("DELETE FROM agents WHERE id = ?").run(agentId);
+			this.db.prepare("DELETE FROM agents WHERE id = ? AND trunk_id = ?").run(agentId, trunkId);
 			if (!clearTrunkWhenEmpty) return;
 
 			const row = this.db.prepare("SELECT COUNT(*) AS count FROM agents WHERE trunk_id = ?").get(trunkId) as {

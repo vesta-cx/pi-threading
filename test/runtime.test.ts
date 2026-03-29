@@ -20,6 +20,7 @@ class FakeRpcClient extends EventEmitter {
 	alive = true;
 	stderr = "";
 	autoExitOnKill = true;
+	exitBeforeKillError = false;
 	messages: unknown[] = [];
 	throwOnPrompt = false;
 	throwOnKill = false;
@@ -36,7 +37,13 @@ class FakeRpcClient extends EventEmitter {
 
 	async kill(timeout = 1000): Promise<void> {
 		this.killTimeouts.push(timeout);
-		if (this.throwOnKill) throw new Error("kill failed");
+		if (this.throwOnKill) {
+			if (this.exitBeforeKillError) {
+				this.alive = false;
+				this.emit("exit", 0, "SIGTERM");
+			}
+			throw new Error("kill failed");
+		}
 		this.alive = false;
 		if (this.autoExitOnKill) {
 			this.emit("exit", 0, "SIGTERM");
@@ -209,6 +216,24 @@ describe("ThreadRuntime", () => {
 		await assert.rejects(() => runtime.stop(handle.id), /kill failed/);
 		client.emit("exit", 1, "SIGTERM");
 		assert.equal(store.getAgent(handle.id)?.status, "crashed");
+	});
+
+	it("keeps requested stops classified as killed when the client exits before kill throws", async () => {
+		const client = new FakeRpcClient();
+		client.throwOnKill = true;
+		client.exitBeforeKillError = true;
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Do work");
+		await assert.rejects(() => runtime.stop(handle.id), /kill failed/);
+		assert.equal(store.getAgent(handle.id)?.status, "killed");
 	});
 
 	it("marks the agent killed when stop succeeds before the exit event arrives", async () => {
@@ -608,6 +633,26 @@ describe("ThreadRuntime", () => {
 		assert.equal(store.getAgent("existing-agent")?.name, "existing");
 	});
 
+	it("does not delete agents from other trunks when the first spawn hits a duplicate id", () => {
+		store.createTrunk({ id: "trunk-1" });
+		store.createAgent({ id: "existing-agent", trunkId: "trunk-1", name: "existing" });
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 10,
+			maxTreeDepth: 10,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => new FakeRpcClient(),
+		});
+
+		assert.throws(
+			() => runtime.spawn(createAgentConfig(), "Duplicate id", { id: "existing-agent" }),
+			/UNIQUE|constraint|existing-agent/i,
+		);
+		assert.equal(store.getAgent("existing-agent")?.trunkId, "trunk-1");
+		assert.equal((runtime as any).trunkId, null);
+	});
+
 	it("rejects spawns after shutdown completes", async () => {
 		const runtime = new ThreadRuntime(store, {
 			dbPath: "/tmp/threading.db",
@@ -652,5 +697,35 @@ describe("ThreadRuntime", () => {
 		assert.equal(store.getAgent(first.id)?.status, "killed");
 		assert.equal(store.getAgent(second.id)?.status, "killed");
 		assert.equal(store.getTrunk(trunkId ?? "")?.status, "completed");
+	});
+
+	it("shutdown() still closes the runtime and completes the trunk when a kill fails", async () => {
+		let spawnCount = 0;
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 10,
+			maxTreeDepth: 10,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => {
+				const client = new FakeRpcClient();
+				if (spawnCount++ === 0) {
+					client.throwOnKill = true;
+					client.autoExitOnKill = false;
+				}
+				return client;
+			},
+		});
+
+		const first = runtime.spawn(createAgentConfig({ name: "first" }), "One");
+		const second = runtime.spawn(createAgentConfig({ name: "second" }), "Two");
+		const trunkId = store.getAgent(first.id)?.trunkId;
+		assert.ok(trunkId);
+
+		await assert.rejects(() => runtime.shutdown(), /kill failed/);
+		assert.equal(store.getTrunk(trunkId ?? "")?.status, "completed");
+		assert.throws(() => runtime.spawn(createAgentConfig({ name: "third" }), "Three"), /shutting down|shut down/i);
+		assert.equal(store.getAgent(second.id)?.status, "killed");
+		assert.equal(store.getAgent(first.id)?.status, "running");
 	});
 });

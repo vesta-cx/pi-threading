@@ -361,20 +361,35 @@ export class ThreadRuntime extends EventEmitter {
 		this.shuttingDown = true;
 
 		const activeEntries = Array.from(this.activeAgents.entries());
-		await Promise.all(
-			activeEntries.map(async ([agentId, active]) => {
-				await this.killRequestedAgent(agentId, active, 5000);
-				const agent = this.store.getAgent(agentId);
-				if (agent?.status === "running") {
-					this.store.updateAgentStatus(agentId, "killed");
-				}
-			}),
-		);
-
-		if (this.trunkId && this.store.getTrunk(this.trunkId)) {
-			this.store.updateTrunkStatus(this.trunkId, "completed");
+		const errors: Error[] = [];
+		try {
+			await Promise.all(
+				activeEntries.map(async ([agentId, active]) => {
+					try {
+						await this.killRequestedAgent(agentId, active, 5000);
+					} catch (error) {
+						errors.push(error instanceof Error ? error : new Error(String(error)));
+					} finally {
+						const agent = this.store.getAgent(agentId);
+						if (agent?.status === "running" && !active.client.isAlive()) {
+							this.store.updateAgentStatus(agentId, "killed");
+						}
+					}
+				}),
+			);
+		} finally {
+			if (this.trunkId && this.store.getTrunk(this.trunkId)) {
+				this.store.updateTrunkStatus(this.trunkId, "completed");
+			}
+			this.closed = true;
 		}
-		this.closed = true;
+
+		if (errors.length === 1) {
+			throw errors[0];
+		}
+		if (errors.length > 1) {
+			throw new AggregateError(errors, "Failed to stop one or more agents during shutdown");
+		}
 	}
 
 	private resolveSpawnConfig(configOrRef: AgentConfig | string): AgentConfig {
