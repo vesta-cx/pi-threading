@@ -211,6 +211,23 @@ describe("ThreadRuntime", () => {
 		assert.equal(store.getAgent(handle.id)?.status, "crashed");
 	});
 
+	it("marks the agent killed when stop succeeds before the exit event arrives", async () => {
+		const client = new FakeRpcClient();
+		client.autoExitOnKill = false;
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Do work");
+		await runtime.stop(handle.id);
+		assert.equal(store.getAgent(handle.id)?.status, "killed");
+	});
+
 	it("aggregates usage from message_end and emits agent:activity for tool and message events", () => {
 		const client = new FakeRpcClient();
 		const activities: string[] = [];
@@ -569,6 +586,41 @@ describe("ThreadRuntime", () => {
 		assert.throws(() => runtime.spawn(createAgentConfig(), "Will fail"), /spawn failed/);
 		assert.ok(store.getTrunk(trunk.id));
 		assert.deepEqual(store.getAgentsInTrunk(trunk.id), []);
+	});
+
+	it("does not roll back a pre-existing agent when duplicate custom ids are reused", () => {
+		store.createTrunk({ id: "trunk-1" });
+		store.createAgent({ id: "existing-agent", trunkId: "trunk-1", name: "existing" });
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 10,
+			maxTreeDepth: 10,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => new FakeRpcClient(),
+		});
+		(runtime as any).trunkId = "trunk-1";
+
+		assert.throws(
+			() => runtime.spawn(createAgentConfig(), "Duplicate id", { id: "existing-agent" }),
+			/UNIQUE|constraint|existing-agent/i,
+		);
+		assert.equal(store.getAgent("existing-agent")?.name, "existing");
+	});
+
+	it("rejects spawns after shutdown completes", async () => {
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 10,
+			maxTreeDepth: 10,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => new FakeRpcClient(),
+		});
+		runtime.spawn(createAgentConfig(), "One");
+
+		await runtime.shutdown();
+		assert.throws(() => runtime.spawn(createAgentConfig(), "Two"), /shutting down|shut down/i);
 	});
 
 	it("shutdown() kills active agents and marks the trunk completed", async () => {

@@ -168,6 +168,8 @@ export class ThreadRuntime extends EventEmitter {
 	private readonly settings: ThreadingSettings;
 	private readonly rpcClientFactory: RpcClientFactory;
 	private trunkId: string | null = null;
+	private shuttingDown = false;
+	private closed = false;
 	private readonly activeAgents = new Map<string, ActiveAgentState>();
 	private readonly results = new Map<string, FinishTaskResult>();
 
@@ -190,12 +192,17 @@ export class ThreadRuntime extends EventEmitter {
 
 	/** Spawn a child agent and return a lightweight handle immediately. */
 	spawn(configOrRef: AgentConfig | string, task: string, options: SpawnOptions = {}): AgentHandle {
+		if (this.shuttingDown || this.closed) {
+			throw new Error("Runtime is shutting down");
+		}
+
 		const config = this.resolveSpawnConfig(configOrRef);
 		const hadTrunkBefore = this.trunkId !== null;
 		const agentId = options.id ?? crypto.randomUUID();
 		this.assertWithinLimits(options.parentId ?? null);
 
 		let createdTrunkThisCall = false;
+		let agentPersistedThisCall = false;
 		let client: RpcClientLike | null = null;
 		let activeAdded = false;
 
@@ -215,6 +222,7 @@ export class ThreadRuntime extends EventEmitter {
 				sessionPath: persistedSessionPath,
 				config: serializeAgentConfig(config),
 			});
+			agentPersistedThisCall = true;
 
 			client = this.rpcClientFactory({
 				config: config,
@@ -254,7 +262,7 @@ export class ThreadRuntime extends EventEmitter {
 			if (client) {
 				void client.kill(1).catch(() => {});
 			}
-			if (this.trunkId && (createdTrunkThisCall || this.store.getAgent(agentId))) {
+			if (this.trunkId && (createdTrunkThisCall || agentPersistedThisCall)) {
 				this.rollbackSpawn(agentId, createdTrunkThisCall);
 			}
 			throw error;
@@ -277,6 +285,10 @@ export class ThreadRuntime extends EventEmitter {
 		}
 
 		await this.killRequestedAgent(agentId, active, 1000);
+		const agent = this.store.getAgent(agentId);
+		if (agent?.status === "running") {
+			this.store.updateAgentStatus(agentId, "killed");
+		}
 	}
 
 	/** Return the captured finish result or synthesized crash fallback. */
@@ -345,6 +357,9 @@ export class ThreadRuntime extends EventEmitter {
 
 	/** Gracefully stop all live children, then mark the trunk completed. */
 	async shutdown(): Promise<void> {
+		if (this.closed) return;
+		this.shuttingDown = true;
+
 		const activeEntries = Array.from(this.activeAgents.entries());
 		await Promise.all(
 			activeEntries.map(async ([agentId, active]) => {
@@ -359,6 +374,7 @@ export class ThreadRuntime extends EventEmitter {
 		if (this.trunkId && this.store.getTrunk(this.trunkId)) {
 			this.store.updateTrunkStatus(this.trunkId, "completed");
 		}
+		this.closed = true;
 	}
 
 	private resolveSpawnConfig(configOrRef: AgentConfig | string): AgentConfig {
@@ -371,10 +387,13 @@ export class ThreadRuntime extends EventEmitter {
 		return resolved;
 	}
 
-	private ensureTrunk(): { id: string } {
+	private ensureTrunk(): { id: string; status: string } {
 		if (this.trunkId) {
 			const trunk = this.store.getTrunk(this.trunkId);
 			if (!trunk) throw new Error(`Trunk missing from store: ${this.trunkId}`);
+			if (trunk.status === "completed") {
+				throw new Error("Runtime has been shut down");
+			}
 			return trunk;
 		}
 
