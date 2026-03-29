@@ -420,6 +420,35 @@ describe("getTreeCost", () => {
 });
 
 // ---------------------------------------------------------------------------
+// rollbackSpawn
+// ---------------------------------------------------------------------------
+
+describe("rollbackSpawn", () => {
+	it("deletes only the target agent inside the target trunk", () => {
+		store.createTrunk({ id: "t1" });
+		store.createTrunk({ id: "t2" });
+		store.createAgent({ id: "a1", trunkId: "t1", name: "scout" });
+		store.createAgent({ id: "a2", trunkId: "t2", name: "worker" });
+
+		const cleared = store.rollbackSpawn("a1", "t2", false);
+		assert.equal(cleared, false);
+		assert.ok(store.getAgent("a1"));
+		assert.ok(store.getAgent("a2"));
+	});
+
+	it("clears a newly created trunk when the target agent was never inserted", () => {
+		store.createTrunk({ id: "existing-trunk" });
+		store.createAgent({ id: "existing-agent", trunkId: "existing-trunk", name: "existing" });
+		store.createTrunk({ id: "new-trunk" });
+
+		const cleared = store.rollbackSpawn("existing-agent", "new-trunk", true);
+		assert.equal(cleared, true);
+		assert.ok(store.getAgent("existing-agent"));
+		assert.equal(store.getTrunk("new-trunk"), null);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // clearTrunk
 // ---------------------------------------------------------------------------
 
