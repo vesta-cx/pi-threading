@@ -142,7 +142,6 @@ interface ActiveAgentState {
 	stopRequested: boolean;
 	finishResult: FinishTaskResult | null;
 	lastActivity: AgentActivity | null;
-	lastAssistantMessage: Message | null;
 	questions: PendingQuestion[];
 }
 
@@ -193,27 +192,30 @@ export class ThreadRuntime extends EventEmitter {
 	spawn(configOrRef: AgentConfig | string, task: string, options: SpawnOptions = {}): AgentHandle {
 		const config = this.resolveSpawnConfig(configOrRef);
 		const hadTrunkBefore = this.trunkId !== null;
-		const trunk = this.ensureTrunk();
-		const createdTrunkThisCall = !hadTrunkBefore;
+		const agentId = options.id ?? crypto.randomUUID();
 		this.assertWithinLimits(options.parentId ?? null);
 
-		const agentId = options.id ?? crypto.randomUUID();
-		const sessionPath = generateSessionPath(trunk.id, agentId, config.sessionDir ?? this.settings.sessionRootDir);
-		const persistedSessionPath = config.noSession ? null : sessionPath;
+		let createdTrunkThisCall = false;
+		let client: RpcClientLike | null = null;
+		let activeAdded = false;
 
-		this.store.createAgent({
-			id: agentId,
-			trunkId: trunk.id,
-			parentAgentId: options.parentId ?? null,
-			name: config.name,
-			displayName: options.displayName ?? null,
-			task,
-			sessionPath: persistedSessionPath,
-			config: serializeAgentConfig(config),
-		});
-
-		let client: RpcClientLike;
 		try {
+			const trunk = this.ensureTrunk();
+			createdTrunkThisCall = !hadTrunkBefore;
+			const sessionPath = generateSessionPath(trunk.id, agentId, config.sessionDir ?? this.settings.sessionRootDir);
+			const persistedSessionPath = config.noSession ? null : sessionPath;
+
+			this.store.createAgent({
+				id: agentId,
+				trunkId: trunk.id,
+				parentAgentId: options.parentId ?? null,
+				name: config.name,
+				displayName: options.displayName ?? null,
+				task,
+				sessionPath: persistedSessionPath,
+				config: serializeAgentConfig(config),
+			});
+
 			client = this.rpcClientFactory({
 				config: config,
 				agentId,
@@ -225,38 +227,38 @@ export class ThreadRuntime extends EventEmitter {
 				env: { ...this.settings.env, ...options.env },
 				cliPath: this.settings.cliPath,
 			});
-		} catch (error) {
-			this.rollbackSpawn(agentId, createdTrunkThisCall);
-			throw error;
-		}
 
-		const active: ActiveAgentState = {
-			client,
-			stopRequested: false,
-			finishResult: null,
-			lastActivity: null,
-			lastAssistantMessage: null,
-			questions: [],
-		};
-		this.activeAgents.set(agentId, active);
-		this.attachClientListeners(agentId, active);
-		this.store.updateAgentStatus(agentId, "running");
-
-		try {
+			const active: ActiveAgentState = {
+				client,
+				stopRequested: false,
+				finishResult: null,
+				lastActivity: null,
+				questions: [],
+			};
+			this.activeAgents.set(agentId, active);
+			activeAdded = true;
+			this.attachClientListeners(agentId, active);
+			this.store.updateAgentStatus(agentId, "running");
 			client.prompt(task);
+
+			return {
+				id: agentId,
+				steer: (message) => this.steer(agentId, message),
+				stop: () => this.stop(agentId),
+				getResult: () => this.getResult(agentId),
+			};
 		} catch (error) {
-			this.activeAgents.delete(agentId);
-			void client.kill(1).catch(() => {});
-			this.rollbackSpawn(agentId, createdTrunkThisCall);
+			if (activeAdded) {
+				this.activeAgents.delete(agentId);
+			}
+			if (client) {
+				void client.kill(1).catch(() => {});
+			}
+			if (this.trunkId && (createdTrunkThisCall || this.store.getAgent(agentId))) {
+				this.rollbackSpawn(agentId, createdTrunkThisCall);
+			}
 			throw error;
 		}
-
-		return {
-			id: agentId,
-			steer: (message) => this.steer(agentId, message),
-			stop: () => this.stop(agentId),
-			getResult: () => this.getResult(agentId),
-		};
 	}
 
 	/** Send a steering message to a live child agent. */
@@ -274,8 +276,7 @@ export class ThreadRuntime extends EventEmitter {
 			throw new Error(`Agent is not running: ${agentId}`);
 		}
 
-		active.stopRequested = true;
-		await active.client.kill(1000);
+		await this.killRequestedAgent(agentId, active, 1000);
 	}
 
 	/** Return the captured finish result or synthesized crash fallback. */
@@ -329,9 +330,10 @@ export class ThreadRuntime extends EventEmitter {
 	/** Answer the oldest pending interactive question for an agent. */
 	answerQuestion(agentId: string, answer: string): void {
 		const active = this.requireActiveAgent(agentId);
-		const question = active.questions.shift();
+		const question = active.questions[0];
 		if (!question) throw new Error(`No pending question for agent ${agentId}`);
 		active.client.respondToUiRequest(question.questionId, buildUiResponse(question, answer));
+		active.questions.shift();
 	}
 
 	/** Return all currently pending interactive questions, oldest first. */
@@ -346,8 +348,7 @@ export class ThreadRuntime extends EventEmitter {
 		const activeEntries = Array.from(this.activeAgents.entries());
 		await Promise.all(
 			activeEntries.map(async ([agentId, active]) => {
-				active.stopRequested = true;
-				await active.client.kill(5000);
+				await this.killRequestedAgent(agentId, active, 5000);
 				const agent = this.store.getAgent(agentId);
 				if (agent?.status === "running") {
 					this.store.updateAgentStatus(agentId, "killed");
@@ -393,17 +394,30 @@ export class ThreadRuntime extends EventEmitter {
 		}
 	}
 
-	private assertWithinLimits(parentId: string | null): void {
-		if (!this.trunkId) return;
+	private async killRequestedAgent(agentId: string, active: ActiveAgentState, timeout: number): Promise<void> {
+		active.stopRequested = true;
+		try {
+			await active.client.kill(timeout);
+		} catch (error) {
+			if (this.activeAgents.get(agentId) === active) {
+				active.stopRequested = false;
+			}
+			throw error;
+		}
+	}
 
+	private assertWithinLimits(parentId: string | null): void {
 		if (parentId) {
+			if (!this.trunkId) {
+				throw new Error(`Cannot spawn agent: parent not found in trunk (${parentId})`);
+			}
 			const parent = this.store.getAgent(parentId);
 			if (!parent || parent.trunkId !== this.trunkId) {
 				throw new Error(`Cannot spawn agent: parent not found in trunk (${parentId})`);
 			}
 		}
 
-		const allAgents = this.store.getAgentsInTrunk(this.trunkId);
+		const allAgents = this.trunkId ? this.store.getAgentsInTrunk(this.trunkId) : [];
 		const liveAgents = allAgents.filter((agent) => !isTerminalAgentStatus(agent.status));
 		const siblingCount = liveAgents.filter((agent) => agent.parentAgentId === parentId).length;
 		if (siblingCount >= this.settings.maxChildren) {
@@ -439,7 +453,6 @@ export class ThreadRuntime extends EventEmitter {
 		}
 
 		const summary = summarizeMessage(event.message);
-		active.lastAssistantMessage = event.message;
 		active.lastActivity = { kind: "message_end", summary, message: event.message, timestamp: Date.now() };
 		this.emit("agent:activity", agentId, active.lastActivity);
 	}
@@ -730,7 +743,7 @@ function parseConfirmation(answer: string): boolean {
 	const value = answer.trim().toLowerCase();
 	if (["y", "yes", "true", "1", "ok", "okay", "confirm"].includes(value)) return true;
 	if (["n", "no", "false", "0", "cancel"].includes(value)) return false;
-	return Boolean(value);
+	return false;
 }
 
 function synthesizeCrashResult(active: ActiveAgentState): FinishTaskResult {
@@ -750,11 +763,6 @@ function synthesizeCrashResult(active: ActiveAgentState): FinishTaskResult {
 
 	if (active.lastActivity?.kind === "message_end") {
 		return { summary: active.lastActivity.summary, source: "crash_fallback" };
-	}
-
-	const assistantSummary = active.lastAssistantMessage ? summarizeMessage(active.lastAssistantMessage) : null;
-	if (assistantSummary) {
-		return { summary: assistantSummary, source: "crash_fallback" };
 	}
 
 	const stderr = active.client.getStderr().trim();

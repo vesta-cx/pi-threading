@@ -22,6 +22,8 @@ class FakeRpcClient extends EventEmitter {
 	autoExitOnKill = true;
 	messages: unknown[] = [];
 	throwOnPrompt = false;
+	throwOnKill = false;
+	throwOnRespond = false;
 
 	prompt(message: string): void {
 		if (this.throwOnPrompt) throw new Error("prompt failed");
@@ -34,6 +36,7 @@ class FakeRpcClient extends EventEmitter {
 
 	async kill(timeout = 1000): Promise<void> {
 		this.killTimeouts.push(timeout);
+		if (this.throwOnKill) throw new Error("kill failed");
 		this.alive = false;
 		if (this.autoExitOnKill) {
 			this.emit("exit", 0, "SIGTERM");
@@ -41,6 +44,7 @@ class FakeRpcClient extends EventEmitter {
 	}
 
 	respondToUiRequest(id: string, response: unknown): void {
+		if (this.throwOnRespond) throw new Error("respond failed");
 		this.responses.push({ id, response });
 	}
 
@@ -166,6 +170,8 @@ describe("ThreadRuntime", () => {
 		});
 
 		assert.throws(() => runtime.spawn(createAgentConfig(), "Do work", { id: "../escape" }), /Invalid agent id/);
+		assert.deepEqual(runtime.getTree().children, []);
+		assert.equal((runtime as any).trunkId, null);
 	});
 
 	it("rolls back the spawn when prompt delivery fails", () => {
@@ -184,6 +190,25 @@ describe("ThreadRuntime", () => {
 		assert.deepEqual(runtime.getTree().children, []);
 		assert.equal((runtime as any).trunkId, null);
 		assert.deepEqual(client.killTimeouts, [1]);
+	});
+
+	it("resets stopRequested when kill fails so later exit is classified as crash", async () => {
+		const client = new FakeRpcClient();
+		client.throwOnKill = true;
+		client.autoExitOnKill = false;
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Do work");
+		await assert.rejects(() => runtime.stop(handle.id), /kill failed/);
+		client.emit("exit", 1, "SIGTERM");
+		assert.equal(store.getAgent(handle.id)?.status, "crashed");
 	});
 
 	it("aggregates usage from message_end and emits agent:activity for tool and message events", () => {
@@ -287,6 +312,54 @@ describe("ThreadRuntime", () => {
 
 		assert.equal(runtime.getPendingQuestions().length, 0);
 		assert.deepEqual(client.responses, [{ id: "q-1", response: { value: "Ship it" } }]);
+	});
+
+	it("keeps a pending question queued if responding to the child throws", () => {
+		const client = new FakeRpcClient();
+		client.throwOnRespond = true;
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Ask if you get stuck");
+		client.emit("extension_ui_request", {
+			type: "extension_ui_request",
+			id: "q-1",
+			method: "input",
+			title: "Need a decision",
+		});
+
+		assert.throws(() => runtime.answerQuestion(handle.id, "Ship it"), /respond failed/);
+		assert.equal(runtime.getPendingQuestions().length, 1);
+	});
+
+	it("treats unrecognized confirm responses as false", () => {
+		const client = new FakeRpcClient();
+		const runtime = new ThreadRuntime(store, {
+			dbPath: "/tmp/threading.db",
+			sessionRootDir,
+			maxChildren: 5,
+			maxTreeDepth: 5,
+			maxTreeAgents: 10,
+			rpcClientFactory: () => client,
+		});
+
+		const handle = runtime.spawn(createAgentConfig(), "Ask if you get stuck");
+		client.emit("extension_ui_request", {
+			type: "extension_ui_request",
+			id: "q-1",
+			method: "confirm",
+			title: "Proceed?",
+			message: "Should I continue?",
+		});
+
+		runtime.answerQuestion(handle.id, "later");
+		assert.deepEqual(client.responses, [{ id: "q-1", response: { confirmed: false } }]);
 	});
 
 	it("captures finish_task results, emits completion, and marks the agent exited on process exit", () => {
